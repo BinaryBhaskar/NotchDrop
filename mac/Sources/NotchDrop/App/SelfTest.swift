@@ -22,6 +22,11 @@ enum SelfTest {
     }
 
     static func run() async -> Int32 {
+        let versions: [(String, String, Bool)] = [("v1.2.0", "1.1.1", true), ("1.10.0", "1.9.9", true), ("1.1.1", "1.1.1", false),
+                                                  ("1.1", "1.1.0", false), ("v1.0.9", "1.1.0", false), ("2.0.0-beta", "1.9", true)]
+        for (a, b, want) in versions where Updater.isNewer(a, than: b) != want {
+            print("FAIL: isNewer(\(a), \(b)) != \(want)"); return 1
+        }
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("nd-selftest-\(UUID().uuidString)")
         let inDir = tmp.appendingPathComponent("in")
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)

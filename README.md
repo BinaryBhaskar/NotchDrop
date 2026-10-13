@@ -17,14 +17,14 @@
 ## Features
 
 **Mac**
-- Drag files, folders, links or text toward the notch. It expands into a drop zone with a marching, glowing outline that pulls particles inward while you hover. Drop to send.
+- Drag files, folders, links or text toward the notch. It expands into a rounded drop box, which tints blue while you're over it. Drop inside the box to send. Drops anywhere else are refused.
 - **Send hotkey.** Record any shortcut in *Settings → Shortcuts*. Pressing it sends the current selection:
   - If Finder is in front, it sends the selected files.
   - In any other app, it sends the selected text.
   - Otherwise it sends the clipboard.
 - **Settings window**, in the style of System Settings. It opens when you launch the app, or from the menu bar with ⌘,. Panes:
-  - *General:* launch at login, hide the menu-bar icon, sounds, trackpad haptics.
-  - *Notch:* turn the notch drop zone on or off, open it on hover, and set the activation-zone width (up to 560 pt) and height (up to 200 pt) with sliders. Only drags inside that zone open the notch. A live dashed outline on screen shows the zone while you adjust it.
+  - *General:* launch at login, hide the menu-bar icon, sounds, trackpad haptics, and update checks.
+  - *Notch:* turn the notch drop zone on or off, open it on hover, and set the activation-zone width (up to 560 pt) and height (up to 200 pt) with sliders. The zone only decides when the notch expands. Once it's open, it stays open while the pointer is over it, and only the drop box itself accepts the drop. A live dashed outline on screen shows the zone while you adjust it.
   - *Shortcuts:* the send hotkey and Accessibility status.
   - *Receiving:*
     - Choose the save folder. The default is `~/Downloads/From <phone>`.
@@ -50,12 +50,14 @@
   - Auto-open links.
   - Battery optimization.
   - A System, Dark or Light theme.
+  - Update checks.
   - Unpair.
 - Pairing is a single QR scan.
 
 **Both**
 - **Rename anything.** Give your Mac or phone the name the other side sees, and give the paired device a local nickname.
 - End-to-end encrypted with AES-256-GCM, using a key exchanged only through the QR code.
+- **Update prompt.** Both apps ask once whether to check GitHub Releases automatically (off unless you agree). If you opt in, they check once a day and offer the new DMG or APK, with *Later* and *Skip This Version*. You can also check by hand from Settings, or from *Check for Updates…* in the Mac menu bar.
 - Finds the other device automatically over Bonjour/NSD, and falls back to the last known IP addresses (for example, on a hotspot that blocks mDNS).
 
 ## Requirements
@@ -142,7 +144,7 @@ The Android unit tests run the protocol against the real Mac binary in both dire
 
 ## Privacy & security
 
-- Nothing leaves your local network. There are no servers, analytics or accounts.
+- Nothing leaves your local network. There are no servers, analytics or accounts. The only internet request is the update check: an anonymous `GET` of the latest GitHub release, made only if you opt in or press *Check now*.
 - The pairing key is stored in `~/Library/Application Support/NotchDrop/peer.json` (mode 0600) on the Mac, and in app-private storage on Android, which is excluded from backups.
 - Anyone who sees the QR code while it's on screen could pair with the Mac, so close the pairing window once you're done. Pairing a new phone replaces the old one.
 

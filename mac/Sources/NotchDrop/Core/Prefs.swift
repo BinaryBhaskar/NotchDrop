@@ -74,6 +74,7 @@ final class Prefs: ObservableObject {
         static let openLinks = "openReceivedLinks"
         static let shortcut = "sendShortcut"
         static let askedAccessibility = "askedAccessibility"
+        static let autoCheckUpdates = "autoCheckUpdates"
     }
 
     static let defaultZone = CGSize(width: 480, height: 160)
@@ -92,6 +93,8 @@ final class Prefs: ObservableObject {
     @Published var confirmReceive: Bool { didSet { d.set(confirmReceive, forKey: Key.confirmReceive) } }
     @Published var copyText: Bool { didSet { d.set(copyText, forKey: Key.copyText) } }
     @Published var openLinks: Bool { didSet { d.set(openLinks, forKey: Key.openLinks) } }
+    /// Opt-in daily check of GitHub Releases.
+    @Published var autoCheckUpdates: Bool { didSet { d.set(autoCheckUpdates, forKey: Key.autoCheckUpdates) } }
     /// nil = default per-phone folder in Downloads.
     @Published var saveFolder: URL? { didSet { d.set(saveFolder?.path, forKey: Key.saveFolder) } }
     /// Not persisted: true while the Notch settings pane is on screen, to draw the activation zone.
@@ -104,7 +107,7 @@ final class Prefs: ObservableObject {
         d.register(defaults: [
             Key.notchEnabled: true, Key.zoneWidth: Double(Self.defaultZone.width), Key.zoneHeight: Double(Self.defaultZone.height),
             Key.openOnHover: false, Key.showMenuBarIcon: true, Key.sounds: true, Key.haptics: true,
-            Key.confirmReceive: false, Key.copyText: true, Key.openLinks: false,
+            Key.confirmReceive: false, Key.copyText: true, Key.openLinks: false, Key.autoCheckUpdates: false,
         ])
         notchEnabled = d.bool(forKey: Key.notchEnabled)
         zoneWidth = d.double(forKey: Key.zoneWidth).clamped(to: Self.zoneWidthRange)
@@ -116,6 +119,7 @@ final class Prefs: ObservableObject {
         confirmReceive = d.bool(forKey: Key.confirmReceive)
         copyText = d.bool(forKey: Key.copyText)
         openLinks = d.bool(forKey: Key.openLinks)
+        autoCheckUpdates = d.bool(forKey: Key.autoCheckUpdates)
         saveFolder = d.string(forKey: Key.saveFolder).map { URL(fileURLWithPath: $0, isDirectory: true) }
         shortcut = d.data(forKey: Key.shortcut).flatMap { try? JSONDecoder().decode(Shortcut.self, from: $0) }
     }

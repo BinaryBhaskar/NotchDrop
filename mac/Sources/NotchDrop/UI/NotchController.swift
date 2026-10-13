@@ -16,8 +16,6 @@ final class NotchUIModel: ObservableObject {
     @Published var dropHover = false
     /// Pointer resting on the notch with "open on hover" enabled.
     @Published var hoverOpen = false
-    /// Set for a moment after a drop so the box animates up into the notch.
-    @Published var justDropped = false
     /// Set a moment into a transfer that is still running, so big files don't hold the notch open.
     @Published var transferCompact = false
     var onClickDropBox: (() -> Void)?
@@ -70,15 +68,6 @@ final class NotchController {
         drag.onMove = { [weak self] p in self?.updateNear(p) }
         drag.start()
 
-        // ND_DEMO=peek|open|hover forces a notch state, for screenshots while designing.
-        if ProcessInfo.processInfo.environment["ND_DEMO"] == "transfer" {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { app.demoTransfer() }
-        } else if let demo = ProcessInfo.processInfo.environment["ND_DEMO"] {
-            ui.dragActive = true
-            ui.nearNotch = demo != "peek"
-            ui.dropHover = demo == "hover"
-        }
-
         app.$activity.sink { [weak self] a in
             guard let self else { return }
             self.updateCompact(transferring: a.isTransferring)
@@ -97,6 +86,15 @@ final class NotchController {
         prefs.$previewZone.combineLatest(prefs.$zoneWidth, prefs.$zoneHeight).sink { [weak self] show, w, h in
             self?.showZone(show ? CGSize(width: w, height: h) : nil)
         }.store(in: &bag)
+
+        // ND_DEMO=peek|open|hover forces a notch state, for screenshots while designing.
+        if ProcessInfo.processInfo.environment["ND_DEMO"] == "transfer" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { app.demoTransfer() }
+        } else if let demo = ProcessInfo.processInfo.environment["ND_DEMO"] {
+            ui.dragActive = true
+            ui.nearNotch = demo != "peek"
+            ui.dropHover = demo == "hover"
+        }
     }
 
     // MARK: Transfer sliver
@@ -127,11 +125,26 @@ final class NotchController {
         return NSRect(x: f.midX - w / 2, y: f.maxY - h, width: w, height: h)
     }
 
-    /// The expanded drop box on screen, matching `NotchRootView`'s open size.
+    /// The expanded notch on screen, matching `NotchRootView`'s open size.
     private var openBox: NSRect {
         let f = panel.frame
         let w = NotchRootView.openSize.width + 16, h = ui.notchSize.height + NotchRootView.openSize.height
         return NSRect(x: f.midX - w / 2, y: f.maxY - h, width: w, height: h)
+    }
+
+    /// The rounded drop target inside the open notch: the only place a drop is accepted.
+    private var dropTarget: NSBezierPath {
+        let f = panel.frame
+        let i = NotchRootView.dropBoxInsets
+        let w = NotchRootView.openSize.width - i.leading - i.trailing
+        let h = NotchRootView.openSize.height - i.top - i.bottom
+        let r = NSRect(x: f.midX - NotchRootView.openSize.width / 2 + i.leading,
+                       y: f.maxY - ui.notchSize.height - i.top - h, width: w, height: h)
+        return NSBezierPath(roundedRect: r, xRadius: NotchRootView.dropBoxRadius, yRadius: NotchRootView.dropBoxRadius)
+    }
+
+    private func inDropTarget(_ p: NSPoint) -> Bool {
+        ui.phase(for: app.activity) == .open && dropTarget.contains(p)
     }
 
     /// Draws the activation zone over the screen while it's being adjusted in Settings.
@@ -180,8 +193,7 @@ final class NotchController {
         let n = ui.notchSize
         let hotspot = NSRect(x: f.midX - n.width / 2, y: f.maxY - n.height, width: n.width, height: n.height)
         // Opens on the notch itself; stays open while the pointer is over the expanded box.
-        let openArea = NSRect(x: f.midX - 240, y: f.maxY - n.height - 200, width: 480, height: n.height + 200)
-        let open = ui.hoverOpen ? openArea.contains(p) : hotspot.contains(p)
+        let open = ui.hoverOpen ? openBox.contains(p) : hotspot.contains(p)
         if open != ui.hoverOpen {
             ui.hoverOpen = open
             if open { prefs.haptic() }
@@ -213,21 +225,16 @@ final class NotchController {
             if !hovering { self?.ui.dropHover = false }
         }
         dv.onMove = { [weak self] p in self?.updateNear(p) }
-        dv.canAccept = { [weak self] in
+        dv.canAccept = { [weak self] p in
             guard let self else { return false }
-            return self.ui.nearNotch && self.app.peer != nil && !self.app.isBusy
+            return self.inDropTarget(p) && self.app.peer != nil && !self.app.isBusy
         }
         dv.onDrop = { [weak self] urls, texts in
             guard let self else { return }
             self.prefs.haptic(.levelChange)
-            self.ui.justDropped = true
-            // Let the suck-in transition pick up `justDropped` before the box is removed.
-            DispatchQueue.main.async {
-                self.ui.dropHover = false
-                self.ui.dragActive = false
-                self.app.send(urls: urls, texts: texts)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.ui.justDropped = false }
-            }
+            self.ui.dropHover = false
+            self.ui.dragActive = false
+            self.app.send(urls: urls, texts: texts)
         }
         ui.onClickDropBox = { [weak self] in
             self?.ui.hoverOpen = false
@@ -257,14 +264,15 @@ final class NotchController {
                        display: true)
     }
 
-    /// Only the activation zone opens the box; once open it stays open while the pointer is over the box itself.
+    /// The activation zone only decides when the notch expands; it stays open while the pointer is
+    /// over the expanded notch. Dropping is a separate question: only the rounded drop box takes drops.
     private func updateNear(_ p: NSPoint) {
         let near = zone.contains(p) || (ui.nearNotch && openBox.contains(p))
         if near != ui.nearNotch {
             ui.nearNotch = near
             if near { prefs.haptic() }
         }
-        let over = near && openBox.contains(p)
+        let over = near && dropTarget.contains(p)
         if over != ui.dropHover { ui.dropHover = over }
     }
 
@@ -364,7 +372,8 @@ final class DragMonitor {
 final class DropView: NSView {
     var onHover: ((Bool) -> Void)?
     var onDrop: (([URL], [String]) -> Void)?
-    var canAccept: (() -> Bool)?
+    /// Whether a drop at this screen point would be taken.
+    var canAccept: ((NSPoint) -> Bool)?
     /// Pointer position in screen coordinates while a drag is over the panel.
     var onMove: ((NSPoint) -> Void)?
 
@@ -384,12 +393,17 @@ final class DropView: NSView {
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         onHover?(true)
         report(sender)
-        return canAccept?() == true ? .copy : []
+        return accepts(sender) ? .copy : []
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
         report(sender)
-        return canAccept?() == true ? .copy : []
+        return accepts(sender) ? .copy : []
+    }
+
+    private func accepts(_ sender: NSDraggingInfo) -> Bool {
+        guard let window else { return false }
+        return canAccept?(window.convertPoint(toScreen: sender.draggingLocation)) == true
     }
 
     private func report(_ sender: NSDraggingInfo) {
@@ -402,7 +416,7 @@ final class DropView: NSView {
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard canAccept?() == true else { return false }
+        guard accepts(sender) else { return false }
         let pb = sender.draggingPasteboard
         if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
             onDrop?(urls, [])

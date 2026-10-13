@@ -39,6 +39,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else if !asLoginItem {
             settings.show()
         }
+        prefs.$autoCheckUpdates.dropFirst().filter { $0 }.sink { _ in
+            DispatchQueue.main.async { Updater.shared.checkIfDue() }
+        }.store(in: &bag)
+        // After the first window, so the one-time opt-in question doesn't land under it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { Updater.shared.start() }
     }
 
     /// Opening the app again (Spotlight, Finder, Dock) while it's running brings up Settings.
@@ -88,6 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(item("Rename This Mac…", #selector(renameMac), ""))
         menu.addItem(item("Settings…", #selector(openSettings), ","))
+        menu.addItem(item("Check for Updates…", #selector(checkForUpdates), ""))
         menu.addItem(.separator())
         menu.addItem(item("Quit NotchDrop", #selector(quit), "q"))
         app.ping()
@@ -163,6 +169,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openSettings() { settings.show() }
+
+    @objc private func checkForUpdates() { Updater.shared.check(manual: true) }
 
     @objc private func quit() { NSApp.terminate(nil) }
 }

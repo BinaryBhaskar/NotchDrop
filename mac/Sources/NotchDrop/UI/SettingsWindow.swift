@@ -154,6 +154,7 @@ struct GeneralPane: View {
                 Toggle("Play sounds", isOn: $prefs.sounds)
                 Toggle("Haptic feedback on the trackpad", isOn: $prefs.haptics)
             }
+            UpdatesSection(prefs: prefs, updater: .shared)
         }
     }
 
@@ -164,6 +165,38 @@ struct GeneralPane: View {
         } catch {
             loginError.value = "Couldn't change the login item: \(error.localizedDescription)"
             launchAtLogin.value = SMAppService.mainApp.status == .enabled
+        }
+    }
+}
+
+struct UpdatesSection: View {
+    @ObservedObject var prefs: Prefs
+    @ObservedObject var updater: Updater
+
+    var body: some View {
+        Section {
+            Toggle("Check for updates automatically", isOn: $prefs.autoCheckUpdates)
+            LabeledContent {
+                Button("Check Now") { updater.check(manual: true) }
+                    .disabled(updater.status == .checking)
+            } label: {
+                Text("Version \(updater.currentVersion)")
+                Text(statusText)
+            }
+        } header: {
+            Text("Updates")
+        } footer: {
+            Text("Once a day, NotchDrop asks GitHub for the latest release. Nothing else leaves your Mac.")
+        }
+    }
+
+    private var statusText: String {
+        switch updater.status {
+        case .idle: return "Not checked yet"
+        case .checking: return "Checking…"
+        case .upToDate: return "Up to date"
+        case .available(let r): return "Version \(r.version) is available"
+        case .failed: return "Couldn't reach GitHub"
         }
     }
 }

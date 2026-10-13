@@ -68,12 +68,15 @@ import com.amurot.notchdrop.service.Node
 import com.amurot.notchdrop.service.NodeService
 import com.amurot.notchdrop.service.NodeState
 import com.amurot.notchdrop.service.Outgoing
+import com.amurot.notchdrop.service.Updates
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private var batteryOk by mutableStateOf(true)
+    private var askUpdates by mutableStateOf(false)
+    private var update by mutableStateOf<Updates.Release?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -105,6 +108,21 @@ class MainActivity : ComponentActivity() {
                     onOpenEntry = ::openEntry,
                     onDismissActivity = Node::dismissActivity,
                 )
+                if (askUpdates) {
+                    UpdateOptInDialog { on ->
+                        askUpdates = false
+                        Node.store.autoUpdateCheck = on
+                        if (on) checkForUpdate()
+                    }
+                }
+                update?.let { r ->
+                    UpdateDialog(
+                        r,
+                        onDownload = { update = null; openUrl(r.apk ?: r.page) },
+                        onLater = { update = null },
+                        onSkip = { update = null; Node.store.skippedVersion = r.version },
+                    )
+                }
             }
         }
     }
@@ -116,6 +134,20 @@ class MainActivity : ComponentActivity() {
         Node.scheduleRefresh(0)
         batteryOk = Node.store.batteryPromptDismissed ||
             getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
+        // Ask about automatic update checks once, after pairing so it doesn't crowd the first run.
+        if (!Node.store.updatePromptShown && Node.store.peer != null) {
+            Node.store.updatePromptShown = true
+            askUpdates = true
+        }
+        checkForUpdate()
+    }
+
+    private fun checkForUpdate() {
+        lifecycleScope.launch { Updates.check(Node.store, manual = false)?.let { update = it } }
+    }
+
+    private fun openUrl(url: String) {
+        runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
     }
 
     override fun onPause() {

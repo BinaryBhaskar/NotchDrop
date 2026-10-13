@@ -69,6 +69,23 @@ class PeerStore(private val ctx: Context) {
         get() = runCatching { ThemeMode.valueOf(prefs.getString("theme", null)!!) }.getOrDefault(ThemeMode.System)
         set(v) = prefs.edit().putString("theme", v.name).apply()
 
+    /** Opt-in daily check of GitHub Releases; [updatePromptShown] records that we asked once. */
+    var autoUpdateCheck: Boolean
+        get() = prefs.getBoolean("autoUpdateCheck", false)
+        set(v) = prefs.edit().putBoolean("autoUpdateCheck", v).apply()
+
+    var updatePromptShown: Boolean
+        get() = prefs.getBoolean("updatePromptShown", false)
+        set(v) = prefs.edit().putBoolean("updatePromptShown", v).apply()
+
+    var lastUpdateCheck: Long
+        get() = prefs.getLong("lastUpdateCheck", 0)
+        set(v) = prefs.edit().putLong("lastUpdateCheck", v).apply()
+
+    var skippedVersion: String?
+        get() = prefs.getString("skippedVersion", null)
+        set(v) = prefs.edit().putString("skippedVersion", v).apply()
+
     var batteryPromptDismissed: Boolean
         get() = prefs.getBoolean("batteryPromptDismissed", false)
         set(v) = prefs.edit().putBoolean("batteryPromptDismissed", v).apply()

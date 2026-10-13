@@ -46,6 +46,10 @@ struct NotchRootView: View {
     private let flare: CGFloat = 8
     /// Expanded drop box size below the notch; `NotchController` uses it for hit testing.
     static let openSize = CGSize(width: 460, height: 196)
+    /// The rounded drop target's inset within the open area below the notch, and its corner radius.
+    /// `NotchController` uses both so the drop box is exactly the area that takes drops.
+    static let dropBoxInsets = EdgeInsets(top: 56, leading: 18, bottom: 18, trailing: 18)
+    static let dropBoxRadius: CGFloat = 20
     /// Extra width on each side of the notch for the transfer sliver's icon and percentage.
     static let miniEar: CGFloat = 46
 
@@ -105,11 +109,8 @@ struct NotchRootView: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .top)))
         case .open:
             OpenView(app: app, targeted: ui.dropHover, onClick: ui.onClickDropBox)
-                .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.92, anchor: .top)).animation(.spring(response: 0.4, dampingFraction: 0.8).delay(0.05)),
-                                        removal: ui.justDropped
-                                            // Sucked up into the notch.
-                                            ? .scale(scale: 0.05, anchor: .top).combined(with: .opacity).animation(.easeIn(duration: 0.28))
-                                            : .opacity.animation(.easeOut(duration: 0.12))))
+                .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.2).delay(0.08)),
+                                        removal: .opacity.animation(.easeOut(duration: 0.12))))
         case .activity:
             ActivityView(app: app)
                 .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
@@ -190,7 +191,7 @@ struct OpenView: View {
     var onClick: (() -> Void)?
 
     var body: some View {
-        VStack(spacing: 12) {
+        ZStack(alignment: .top) {
             HStack(spacing: 10) {
                 PhoneGlyph(color: .white.opacity(0.9), size: 24)
                 VStack(alignment: .leading, spacing: 2) {
@@ -201,109 +202,46 @@ struct OpenView: View {
                 }
                 Spacer()
             }
+            .frame(height: 34)
             .padding(.horizontal, 22)
             .padding(.top, 10)
 
             DropBox(title: app.peer == nil ? "Pair a phone from the menu bar first" : "Drop to share to \(app.peerName)",
                     targeted: targeted && app.peer != nil)
-                .contentShape(Rectangle())
+                .contentShape(RoundedRectangle(cornerRadius: NotchRootView.dropBoxRadius, style: .continuous))
                 .onTapGesture { onClick?() }
-                .padding(.horizontal, 18)
-                .padding(.bottom, 18)
+                .padding(NotchRootView.dropBoxInsets)
         }
+        .frame(width: NotchRootView.openSize.width, height: NotchRootView.openSize.height, alignment: .top)
     }
 }
 
-/// The dashed drop target. While something hovers over it, the outline turns into a marching
-/// blue–violet gradient, the box breathes, and particles stream into a glowing core.
+/// The drop target. Hovering only shifts its colours: a calm tint, nothing moves.
 struct DropBox: View {
     var title: String
     var targeted: Bool
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 60, paused: !targeted)) { tl in
-            let t = tl.date.timeIntervalSinceReferenceDate
-            let dash = targeted ? CGFloat((t * 46).truncatingRemainder(dividingBy: 13)) : 0
-            let breath = targeted ? 0.985 - 0.012 * CGFloat(sin(t * 5)) : 1
-            ZStack {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(targeted
-                          ? AnyShapeStyle(LinearGradient(colors: [Palette.accent.opacity(0.2), Palette.accent2.opacity(0.16)],
-                                                         startPoint: .topLeading, endPoint: .bottomTrailing))
-                          : AnyShapeStyle(Color.white.opacity(0.04)))
-                if targeted {
-                    SuctionField(time: t)
-                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .transition(.opacity)
-                }
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(style: StrokeStyle(lineWidth: targeted ? 2.2 : 1.5, lineCap: .round, dash: [7, 6], dashPhase: dash))
-                    .foregroundStyle(targeted
-                                     ? AnyShapeStyle(AngularGradient(colors: [Palette.accent, Palette.accent2, Palette.accent],
-                                                                     center: .center, angle: .degrees(t * 90)))
-                                     : AnyShapeStyle(Color.white.opacity(0.3)))
-                    .shadow(color: targeted ? Palette.accent2.opacity(0.6) : .clear, radius: 6)
-                VStack(spacing: 8) {
-                    ZStack {
-                        Circle()
-                            .fill(targeted ? Palette.accent : Color.white.opacity(0.08))
-                            .frame(width: 38, height: 38)
-                            .shadow(color: targeted ? Palette.accent.opacity(0.8) : .clear, radius: 10)
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(targeted ? .white : .white.opacity(0.8))
-                            .offset(y: targeted ? CGFloat(sin(t * 6)) * 2 : 0)
-                    }
-                    Text(targeted ? "Release to send" : title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                    Text("Files · Photos · Folders · Links · Text")
-                        .font(.system(size: 10.5, weight: .medium))
-                        .foregroundStyle(.white.opacity(targeted ? 0 : 0.42))
-                }
-            }
-            .scaleEffect(breath)
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: targeted)
-        }
-        .frame(height: 118)
-    }
-}
-
-/// Particles drifting from the edges toward the center, over a pulsing glow.
-struct SuctionField: View {
-    var time: Double
-    private static let seeds: [(angle: Double, speed: Double, offset: Double, size: Double)] = (0..<34).map { i in
-        let g = Double(i) * 2.399963 // golden angle spreads them evenly
-        return (g, 0.55 + Double((i * 37) % 11) / 20, Double((i * 53) % 97) / 97, 1.4 + Double((i * 17) % 5) / 3)
-    }
-
-    var body: some View {
-        Canvas { ctx, size in
-            let c = CGPoint(x: size.width / 2, y: size.height / 2)
-            let pulse = 0.5 + 0.5 * sin(time * 5)
-            let glowR = 30 + 10 * pulse
-            ctx.fill(Path(ellipseIn: CGRect(x: c.x - glowR * 2, y: c.y - glowR, width: glowR * 4, height: glowR * 2)),
-                     with: .radialGradient(Gradient(colors: [Palette.accent2.opacity(0.45), Palette.accent.opacity(0.15), .clear]),
-                                           center: c, startRadius: 0, endRadius: glowR * 2))
-            let rx = size.width / 2 + 10, ry = size.height / 2 + 10
-            for s in Self.seeds {
-                // p goes 0 → 1 as a particle travels from the rim to the center, accelerating.
-                let p = (time * s.speed * 0.7 + s.offset).truncatingRemainder(dividingBy: 1)
-                let d = pow(1 - p, 1.6)
-                let a = s.angle + p * 0.9 // slight swirl
-                let pt = CGPoint(x: c.x + cos(a) * rx * d, y: c.y + sin(a) * ry * d)
-                let r = s.size * (0.4 + d)
-                let alpha = min(1, p * 4) * (1 - p) * 0.9
-                let color = p < 0.5 ? Palette.accent : Palette.accent2
-                ctx.fill(Path(ellipseIn: CGRect(x: pt.x - r, y: pt.y - r, width: r * 2, height: r * 2)), with: .color(color.opacity(alpha)))
-                // Short streak behind each particle.
-                var streak = Path()
-                streak.move(to: pt)
-                streak.addLine(to: CGPoint(x: c.x + cos(a) * rx * min(1, d * 1.18), y: c.y + sin(a) * ry * min(1, d * 1.18)))
-                ctx.stroke(streak, with: .color(color.opacity(alpha * 0.35)), lineWidth: r * 0.8)
+        let shape = RoundedRectangle(cornerRadius: NotchRootView.dropBoxRadius, style: .continuous)
+        ZStack {
+            shape.fill(targeted ? Palette.accent.opacity(0.14) : Color.white.opacity(0.04))
+            shape.strokeBorder(targeted ? Palette.accent.opacity(0.9) : Color.white.opacity(0.22),
+                               style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
+            VStack(spacing: 8) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(targeted ? Color.white : Color.white.opacity(0.8))
+                    .frame(width: 36, height: 36)
+                    .background(Circle().fill(targeted ? Palette.accent : Color.white.opacity(0.08)))
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                Text("Files · Photos · Folders · Links · Text")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(targeted ? Palette.accent.opacity(0.9) : Color.white.opacity(0.42))
             }
         }
-        .allowsHitTesting(false)
+        .animation(.easeOut(duration: 0.18), value: targeted)
     }
 }
 

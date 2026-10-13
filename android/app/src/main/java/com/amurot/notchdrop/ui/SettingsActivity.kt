@@ -29,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +40,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.amurot.notchdrop.BuildConfig
 import com.amurot.notchdrop.service.Node
 import com.amurot.notchdrop.service.NodeService
+import com.amurot.notchdrop.service.Updates
+import kotlinx.coroutines.launch
 
 class SettingsActivity : ComponentActivity() {
     private var batteryOk by mutableStateOf(true)
@@ -98,6 +101,10 @@ private fun SettingsScreen(
     var openLinks by remember { mutableStateOf(store.openLinks) }
     var renaming by remember { mutableStateOf<RenameTarget?>(null) }
     var confirmUnpair by remember { mutableStateOf(false) }
+    var autoUpdate by remember { mutableStateOf(store.autoUpdateCheck) }
+    var update by remember { mutableStateOf<Updates.Release?>(null) }
+    val updateStatus by Updates.status.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
 
     LazyColumn(
         Modifier.fillMaxSize().background(Palette.bg).safeDrawingPadding(),
@@ -175,6 +182,24 @@ private fun SettingsScreen(
             NdGroup("About") {
                 NdRow("Version", icon = NdIcons.Info) { Text(BuildConfig.VERSION_NAME, color = Palette.dim, fontSize = 14.sp) }
                 NdDivider()
+                ToggleRow("Auto-check for updates", "Once a day, asks GitHub for the latest release", NdIcons.Refresh, autoUpdate) {
+                    autoUpdate = it; store.autoUpdateCheck = it
+                }
+                NdDivider()
+                NdRow(
+                    "Check now",
+                    description = when (val st = updateStatus) {
+                        Updates.Status.Idle -> "Look for a newer version on GitHub"
+                        Updates.Status.Checking -> "Checking…"
+                        Updates.Status.UpToDate -> "You're on the latest version"
+                        is Updates.Status.Available -> "Version ${st.release.version} is available"
+                        Updates.Status.Failed -> "Couldn't reach GitHub"
+                    },
+                    icon = NdIcons.Down,
+                    tint = if (updateStatus is Updates.Status.Available) Palette.ok else Palette.accent,
+                    onClick = { scope.launch { Updates.check(store, manual = true)?.let { update = it } } },
+                )
+                NdDivider()
                 NdRow("Source code", description = "github.com/BinaryBhaskar/NotchDrop", icon = NdIcons.Code, tint = Palette.accent2,
                     onClick = { onOpenUrl("https://github.com/BinaryBhaskar/NotchDrop") }) {
                     NdIcon(NdIcons.Open, size = 18.dp, tint = Palette.dim)
@@ -213,6 +238,15 @@ private fun SettingsScreen(
             onSave = { renaming = null; Node.renamePeer(it) },
         )
         null -> {}
+    }
+
+    update?.let { r ->
+        UpdateDialog(
+            r,
+            onDownload = { update = null; onOpenUrl(r.apk ?: r.page) },
+            onLater = { update = null },
+            onSkip = { update = null; store.skippedVersion = r.version },
+        )
     }
 
     if (confirmUnpair) {
