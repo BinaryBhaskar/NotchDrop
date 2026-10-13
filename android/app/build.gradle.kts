@@ -21,8 +21,8 @@ android {
         minSdk = 29
         // Stay on 35 so Android 17's opt-in local-network permission doesn't apply yet.
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.1.1"
+        versionCode = 4
+        versionName = "1.2.0"
         // 64-bit ARM covers modern phones and Apple-silicon emulators; keeps ML Kit's native libs small.
         ndk { abiFilters += "arm64-v8a" }
     }
