@@ -94,6 +94,9 @@ final class Store: @unchecked Sendable {
     }
 
     var receiveDirectory: URL {
+        if let custom = UserDefaults.standard.string(forKey: Prefs.Key.saveFolder) {
+            return URL(fileURLWithPath: custom, isDirectory: true)
+        }
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
         return downloads.appendingPathComponent("From \(peer?.displayName ?? "Phone")", isDirectory: true)
     }

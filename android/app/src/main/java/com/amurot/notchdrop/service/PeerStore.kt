@@ -1,12 +1,13 @@
-package app.notchdrop.service
+package com.amurot.notchdrop.service
 
 import android.content.Context
 import android.os.Build
 import android.provider.Settings
-import org.json.JSONArray
-import org.json.JSONObject
+import com.amurot.notchdrop.ui.ThemeMode
 import java.util.Base64
 import java.util.UUID
+import org.json.JSONArray
+import org.json.JSONObject
 
 data class PairedMac(
     val id: String,
@@ -53,6 +54,20 @@ class PeerStore(private val ctx: Context) {
     var receiveEnabled: Boolean
         get() = prefs.getBoolean("receive", true)
         set(v) = prefs.edit().putBoolean("receive", v).apply()
+
+    /** Put received text straight on the clipboard. */
+    var autoCopyText: Boolean
+        get() = prefs.getBoolean("autoCopyText", true)
+        set(v) = prefs.edit().putBoolean("autoCopyText", v).apply()
+
+    /** Open received links in the browser (only possible while the app is on screen). */
+    var openLinks: Boolean
+        get() = prefs.getBoolean("openLinks", false)
+        set(v) = prefs.edit().putBoolean("openLinks", v).apply()
+
+    var theme: ThemeMode
+        get() = runCatching { ThemeMode.valueOf(prefs.getString("theme", null)!!) }.getOrDefault(ThemeMode.System)
+        set(v) = prefs.edit().putString("theme", v.name).apply()
 
     var batteryPromptDismissed: Boolean
         get() = prefs.getBoolean("batteryPromptDismissed", false)

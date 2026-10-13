@@ -1,19 +1,29 @@
 import AppKit
 import Combine
-import ServiceManagement
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    private(set) static weak var shared: AppDelegate?
     private let app = AppModel.shared
+    private let prefs = Prefs.shared
     private var notch: NotchController!
     private var pairWindow: PairWindowController!
+    private var settings: SettingsWindowController!
     private var statusItem: NSStatusItem!
     private var bag = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Self.shared = self
+        // Checked first: the launch Apple Event is only available during this call.
+        let asLoginItem = launchedAsLoginItem()
         app.start()
         notch = NotchController(app: app)
         pairWindow = PairWindowController(app: app)
+        settings = SettingsWindowController(app: app)
+        settings.onPair = { [weak self] in self?.pairWindow.show() }
+
+        Hotkey.shared.onPress = { [weak self] in self?.app.sendSelection() }
+        prefs.$shortcut.sink { Hotkey.shared.register($0) }.store(in: &bag)
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         let menu = NSMenu()
@@ -22,8 +32,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         app.$reachable.combineLatest(app.$peer).sink { [weak self] reachable, peer in
             self?.updateIcon(paired: peer != nil, reachable: reachable)
         }.store(in: &bag)
+        prefs.$showMenuBarIcon.sink { [weak self] in self?.statusItem.isVisible = $0 }.store(in: &bag)
 
-        if app.peer == nil { pairWindow.show() }
+        if app.peer == nil {
+            pairWindow.show()
+        } else if !asLoginItem {
+            settings.show()
+        }
+    }
+
+    /// Opening the app again (Spotlight, Finder, Dock) while it's running brings up Settings.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        settings.show()
+        return false
+    }
+
+    private func launchedAsLoginItem() -> Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent else { return false }
+        return event.eventID == kAEOpenApplication
+            && event.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
     }
 
     private func updateIcon(paired: Bool, reachable: Bool) {
@@ -43,7 +70,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(disabled("\(peer.displayName) — \(status)"))
             menu.addItem(.separator())
             menu.addItem(item("Send Files…", #selector(sendFiles), "o"))
-            menu.addItem(item("Send Clipboard", #selector(sendClipboard), "v"))
+            let clip = item("Send Clipboard", #selector(sendClipboard), "v")
+            menu.addItem(clip)
+            if let s = prefs.shortcut {
+                menu.addItem(disabled("Send Selection  \(s.display)"))
+            }
             menu.addItem(item("Open Received Folder", #selector(openFolder), ""))
             menu.addItem(.separator())
             menu.addItem(item("Rename \(peer.displayName)…", #selector(renamePeer), ""))
@@ -56,9 +87,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         menu.addItem(.separator())
         menu.addItem(item("Rename This Mac…", #selector(renameMac), ""))
-        let login = item("Launch at Login", #selector(toggleLogin), "")
-        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        menu.addItem(login)
+        menu.addItem(item("Settings…", #selector(openSettings), ","))
+        menu.addItem(.separator())
         menu.addItem(item("Quit NotchDrop", #selector(quit), "q"))
         app.ping()
     }
@@ -75,7 +105,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return i
     }
 
-    @objc private func sendFiles() {
+    @objc func sendFiles() {
+        guard app.peer != nil else { pairWindow.show(); return }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = true
@@ -131,17 +162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return String(field.stringValue.prefix(40))
     }
 
-    @objc private func toggleLogin() {
-        do {
-            if SMAppService.mainApp.status == .enabled {
-                try SMAppService.mainApp.unregister()
-            } else {
-                try SMAppService.mainApp.register()
-            }
-        } catch {
-            NSLog("NotchDrop: login item error \(error)")
-        }
-    }
+    @objc private func openSettings() { settings.show() }
 
     @objc private func quit() { NSApp.terminate(nil) }
 }

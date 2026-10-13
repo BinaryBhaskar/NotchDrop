@@ -1,4 +1,4 @@
-package app.notchdrop.core
+package com.amurot.notchdrop.core
 
 import org.json.JSONArray
 import org.json.JSONObject

@@ -1,4 +1,4 @@
-package app.notchdrop.core
+package com.amurot.notchdrop.core
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope

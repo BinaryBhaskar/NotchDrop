@@ -1,13 +1,13 @@
-package app.notchdrop.service
+package com.amurot.notchdrop.service
 
 import android.content.ContentValues
 import android.content.Context
 import android.os.Environment
 import android.provider.MediaStore
-import app.notchdrop.core.IncomingFile
-import app.notchdrop.core.NDException
-import app.notchdrop.core.ReceiveSink
-import app.notchdrop.core.ReceivedFile
+import com.amurot.notchdrop.core.IncomingFile
+import com.amurot.notchdrop.core.NDException
+import com.amurot.notchdrop.core.ReceiveSink
+import com.amurot.notchdrop.core.ReceivedFile
 import java.io.OutputStream
 
 /** Saves into Download/From <Mac> via MediaStore; no storage permission needed. */

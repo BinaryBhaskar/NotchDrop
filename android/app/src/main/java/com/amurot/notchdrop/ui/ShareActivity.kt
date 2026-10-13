@@ -1,4 +1,4 @@
-package app.notchdrop.ui
+package com.amurot.notchdrop.ui
 
 import android.content.ClipboardManager
 import android.content.Intent
@@ -44,13 +44,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.IntentCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
-import app.notchdrop.core.OutgoingItem
-import app.notchdrop.service.Activity
-import app.notchdrop.service.Node
-import app.notchdrop.service.NodeState
-import app.notchdrop.service.Outgoing
+import com.amurot.notchdrop.core.OutgoingItem
+import com.amurot.notchdrop.service.Activity
+import com.amurot.notchdrop.service.Node
+import com.amurot.notchdrop.service.NodeState
+import com.amurot.notchdrop.service.Outgoing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -68,7 +69,7 @@ private sealed interface Phase {
 /** Share-sheet target (and the clipboard tile): a small sheet that sends straight to the paired Mac. */
 class ShareActivity : ComponentActivity() {
     companion object {
-        const val ACTION_SEND_CLIPBOARD = "app.notchdrop.SEND_CLIPBOARD"
+        const val ACTION_SEND_CLIPBOARD = "com.amurot.notchdrop.SEND_CLIPBOARD"
     }
 
     private var phase by mutableStateOf<Phase>(Phase.Preparing)
@@ -126,8 +127,8 @@ class ShareActivity : ComponentActivity() {
 
     private fun collect(intent: Intent): List<OutgoingItem> {
         val uris = when (intent.action) {
-            Intent.ACTION_SEND -> listOfNotNull(intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java))
-            Intent.ACTION_SEND_MULTIPLE -> intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
+            Intent.ACTION_SEND -> listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
+            Intent.ACTION_SEND_MULTIPLE -> IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
             else -> emptyList()
         }
         if (uris.isNotEmpty()) return Outgoing.fromUris(this, uris)
@@ -220,7 +221,7 @@ private fun Sheet(state: NodeState, phase: Phase, onDismiss: () -> Unit, onRetry
 }
 
 @Composable
-private fun Title(s: String) = Text(s, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+private fun Title(s: String) = Text(s, color = Palette.text, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
 
 @Composable
 private fun Sub(s: String) = Text(s, color = Palette.dim, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))

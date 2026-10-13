@@ -4,16 +4,16 @@ plugins {
 }
 
 android {
-    namespace = "app.notchdrop"
+    namespace = "com.amurot.notchdrop"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "app.notchdrop"
-        minSdk = 34
+        applicationId = "com.amurot.notchdrop"
+        minSdk = 29
         // Stay on 35 so Android 17's opt-in local-network permission doesn't apply yet.
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
         // 64-bit ARM covers modern phones and Apple-silicon emulators; keeps ML Kit's native libs small.
         ndk { abiFilters += "arm64-v8a" }
     }
@@ -32,6 +32,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     testOptions {
         unitTests.all {

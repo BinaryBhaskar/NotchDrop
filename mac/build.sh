@@ -21,16 +21,17 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
   <key>CFBundleName</key><string>NotchDrop</string>
   <key>CFBundleDisplayName</key><string>NotchDrop</string>
-  <key>CFBundleIdentifier</key><string>app.notchdrop</string>
+  <key>CFBundleIdentifier</key><string>com.amurot.notchdrop</string>
   <key>CFBundleExecutable</key><string>NotchDrop</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>1.1</string>
+  <key>CFBundleVersion</key><string>2</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSLocalNetworkUsageDescription</key><string>NotchDrop sends files directly to your phone over your local Wi-Fi or hotspot.</string>
+  <key>NSAppleEventsUsageDescription</key><string>NotchDrop asks Finder which files are selected when you press your send shortcut.</string>
   <key>NSBonjourServices</key><array><string>_notchdrop._tcp</string></array>
 </dict>
 </plist>

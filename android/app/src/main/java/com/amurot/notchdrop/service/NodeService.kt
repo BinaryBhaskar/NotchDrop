@@ -1,4 +1,4 @@
-package app.notchdrop.service
+package com.amurot.notchdrop.service
 
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -7,12 +7,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
+import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
-import app.notchdrop.R
-import app.notchdrop.ui.ShareActivity
+import com.amurot.notchdrop.R
+import com.amurot.notchdrop.ui.ShareActivity
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -88,7 +89,12 @@ class ClipboardTile : TileService() {
         val i = Intent(this, ShareActivity::class.java)
             .setAction(ShareActivity.ACTION_SEND_CLIPBOARD)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        val pi = PendingIntent.getActivity(this, 0, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        startActivityAndCollapse(pi)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val pi = PendingIntent.getActivity(this, 0, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            startActivityAndCollapse(pi)
+        } else {
+            @Suppress("DEPRECATION", "StartActivityAndCollapseDeprecated")
+            startActivityAndCollapse(i)
+        }
     }
 }

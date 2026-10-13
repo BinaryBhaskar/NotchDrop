@@ -1,25 +1,37 @@
-package app.notchdrop.service
+package com.amurot.notchdrop.service
 
 import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.Uri
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
-import android.net.Uri
+import android.os.Build
 import android.util.Log
-import app.notchdrop.core.NDException
-import app.notchdrop.core.OutgoingItem
-import app.notchdrop.core.PeerLink
-import app.notchdrop.core.ProgressThrottle
-import app.notchdrop.core.ProtocolServer
-import app.notchdrop.core.ReceiveSink
-import app.notchdrop.core.ReceivedBatch
-import app.notchdrop.core.SessionDelegate
-import app.notchdrop.core.Transfer
-import app.notchdrop.core.Wire
+import android.util.Patterns
+import androidx.annotation.RequiresApi
+import com.amurot.notchdrop.core.NDException
+import com.amurot.notchdrop.core.OutgoingItem
+import com.amurot.notchdrop.core.PeerLink
+import com.amurot.notchdrop.core.ProgressThrottle
+import com.amurot.notchdrop.core.ProtocolServer
+import com.amurot.notchdrop.core.ReceiveSink
+import com.amurot.notchdrop.core.ReceivedBatch
+import com.amurot.notchdrop.core.SessionDelegate
+import com.amurot.notchdrop.core.Transfer
+import com.amurot.notchdrop.core.Wire
+import com.amurot.notchdrop.ui.ThemeMode
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.util.Base64
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -34,11 +46,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.InetAddress
-import java.net.InetSocketAddress
-import java.util.Base64
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
 
 enum class Route { WIFI, HOTSPOT }
 
@@ -78,6 +85,11 @@ object Node : SessionDelegate {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val _state = MutableStateFlow(NodeState())
     val state: StateFlow<NodeState> = _state.asStateFlow()
+    private val _themeMode = MutableStateFlow(ThemeMode.System)
+    val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
+
+    /** True while one of our activities is on screen; Android only lets us open links then. */
+    @Volatile var uiVisible = false
 
     private var server: ProtocolServer? = null
     private val sendLock = Mutex()
@@ -86,7 +98,8 @@ object Node : SessionDelegate {
 
     /** Mac id -> addresses seen via NSD. */
     private val nsdAddrs = ConcurrentHashMap<String, List<String>>()
-    private val nsdCallbacks = ConcurrentHashMap<String, NsdManager.ServiceInfoCallback>()
+    /** ServiceInfoCallbacks by service name (API 34+; older versions resolve once per sighting). */
+    private val nsdCallbacks = ConcurrentHashMap<String, Any>()
     private val nsdExecutor = Executors.newSingleThreadExecutor()
     private var registration: NsdManager.RegistrationListener? = null
     private var discovery: NsdManager.DiscoveryListener? = null
@@ -98,6 +111,7 @@ object Node : SessionDelegate {
         cm = ctx.getSystemService(ConnectivityManager::class.java)
         nsd = ctx.getSystemService(NsdManager::class.java)
         _state.value = NodeState(peer = store.peer, deviceName = store.deviceName, history = store.history)
+        _themeMode.value = store.theme
 
         // Wi-Fi/hotspot changes: tell the Mac our new addresses.
         val req = NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build()
@@ -162,6 +176,20 @@ object Node : SessionDelegate {
             batch.texts.map { HistoryEntry(true, it.take(120), "Text from $mac", System.currentTimeMillis(), text = it) }
         addHistory(entries)
         Notifier.received(ctx, batch, mac)
+        batch.texts.lastOrNull()?.takeIf { store.autoCopyText }?.let { text ->
+            runCatching { ctx.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("From $mac", text)) }
+        }
+        if (store.openLinks && uiVisible) {
+            batch.texts.map { it.trim() }.filter { Patterns.WEB_URL.matcher(it).matches() }.forEach { link ->
+                val url = if ("://" in link) link else "https://$link"
+                runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            }
+        }
+    }
+
+    fun setTheme(mode: ThemeMode) {
+        store.theme = mode
+        _themeMode.value = mode
     }
 
     override fun incomingFailed(error: Exception) {
@@ -371,7 +399,7 @@ object Node : SessionDelegate {
                 override fun onStopDiscoveryFailed(type: String, code: Int) {}
                 override fun onServiceFound(info: NsdServiceInfo) = watch(info)
                 override fun onServiceLost(info: NsdServiceInfo) {
-                    nsdCallbacks.remove(info.serviceName)?.let { runCatching { nsd.unregisterServiceInfoCallback(it) } }
+                    nsdCallbacks.remove(info.serviceName)?.let(::unwatch)
                 }
             }
             runCatching { nsd.discoverServices(Wire.SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, l) }.onSuccess { discovery = l }
@@ -379,18 +407,24 @@ object Node : SessionDelegate {
     }
 
     private fun watch(info: NsdServiceInfo) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) watchUpdates(info) else resolveOnce(info)
+    }
+
+    private fun macSeen(attrs: Map<String, ByteArray>, addrs: List<String>) {
+        if (attrs["role"]?.decodeToString() != "mac") return
+        val id = attrs["id"]?.decodeToString() ?: return
+        if (addrs.isEmpty()) return
+        val changed = nsdAddrs.put(id, addrs) != addrs
+        if (changed && id == store.peer?.id && !_state.value.reachable) scheduleRefresh(300)
+    }
+
+    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    private fun watchUpdates(info: NsdServiceInfo) {
         if (nsdCallbacks.containsKey(info.serviceName)) return
         val cb = object : NsdManager.ServiceInfoCallback {
             override fun onServiceInfoCallbackRegistrationFailed(code: Int) { nsdCallbacks.remove(info.serviceName) }
-            override fun onServiceUpdated(s: NsdServiceInfo) {
-                val attrs = s.attributes
-                if (attrs["role"]?.decodeToString() != "mac") return
-                val id = attrs["id"]?.decodeToString() ?: return
-                val addrs = s.hostAddresses.mapNotNull { a -> a.hostAddress?.takeIf { '.' in it } }
-                if (addrs.isEmpty()) return
-                val changed = nsdAddrs.put(id, addrs) != addrs
-                if (changed && id == store.peer?.id && !_state.value.reachable) scheduleRefresh(300)
-            }
+            override fun onServiceUpdated(s: NsdServiceInfo) =
+                macSeen(s.attributes, s.hostAddresses.mapNotNull { a -> a.hostAddress?.takeIf { '.' in it } })
             override fun onServiceLost() {}
             override fun onServiceInfoCallbackUnregistered() {}
         }
@@ -401,12 +435,33 @@ object Node : SessionDelegate {
         }
     }
 
+    /** Android 10–13: one-shot resolve. Only one may run at a time, so retry when busy. */
+    @Suppress("DEPRECATION")
+    private fun resolveOnce(info: NsdServiceInfo, attempt: Int = 0) {
+        val l = object : NsdManager.ResolveListener {
+            override fun onResolveFailed(s: NsdServiceInfo, code: Int) {
+                if (code == NsdManager.FAILURE_ALREADY_ACTIVE && attempt < 6) {
+                    scope.launch { delay(300L * (attempt + 1)); resolveOnce(info, attempt + 1) }
+                }
+            }
+            override fun onServiceResolved(s: NsdServiceInfo) =
+                macSeen(s.attributes, listOfNotNull(s.host?.hostAddress?.takeIf { '.' in it }))
+        }
+        runCatching { nsd.resolveService(info, l) }
+    }
+
+    private fun unwatch(cb: Any) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            runCatching { nsd.unregisterServiceInfoCallback(cb as NsdManager.ServiceInfoCallback) }
+        }
+    }
+
     private fun stopNsd() {
         registration?.let { runCatching { nsd.unregisterService(it) } }
         registration = null
         discovery?.let { runCatching { nsd.stopServiceDiscovery(it) } }
         discovery = null
-        nsdCallbacks.values.forEach { runCatching { nsd.unregisterServiceInfoCallback(it) } }
+        nsdCallbacks.values.forEach(::unwatch)
         nsdCallbacks.clear()
     }
 }

@@ -1,4 +1,4 @@
-package app.notchdrop.service
+package com.amurot.notchdrop.service
 
 import android.net.ConnectivityManager
 import android.net.LinkAddress

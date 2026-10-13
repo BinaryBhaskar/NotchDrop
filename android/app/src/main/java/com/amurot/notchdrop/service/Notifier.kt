@@ -1,20 +1,21 @@
-package app.notchdrop.service
+package com.amurot.notchdrop.service
 
+import android.app.DownloadManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.app.DownloadManager
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.util.Patterns
-import app.notchdrop.R
-import app.notchdrop.core.ReceivedBatch
-import app.notchdrop.ui.MainActivity
+import com.amurot.notchdrop.R
+import com.amurot.notchdrop.core.ReceivedBatch
+import com.amurot.notchdrop.ui.MainActivity
 import java.util.concurrent.atomic.AtomicInteger
 
 object Notifier {
@@ -63,7 +64,7 @@ object Notifier {
             .setContentIntent(openApp(ctx))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+            .apply { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE) }
             .build()
     }
 
@@ -99,7 +100,13 @@ object Notifier {
             )
             val b = Notification.Builder(ctx, CH_RECEIVED)
                 .setSmallIcon(R.drawable.ic_notify)
-                .setContentTitle(if (isLink) "Link from $mac" else "Text from $mac")
+                .setContentTitle(
+                    when {
+                        isLink -> "Link from $mac"
+                        Node.store.autoCopyText && text == batch.texts.last() -> "Copied text from $mac"
+                        else -> "Text from $mac"
+                    }
+                )
                 .setContentText(text)
                 .setStyle(Notification.BigTextStyle().bigText(text))
                 .setAutoCancel(true)

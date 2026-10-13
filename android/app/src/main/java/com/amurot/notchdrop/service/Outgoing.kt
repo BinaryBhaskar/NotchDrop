@@ -1,9 +1,9 @@
-package app.notchdrop.service
+package com.amurot.notchdrop.service
 
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
-import app.notchdrop.core.OutgoingItem
+import com.amurot.notchdrop.core.OutgoingItem
 import java.io.File
 
 object Outgoing {

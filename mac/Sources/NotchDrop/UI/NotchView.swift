@@ -1,4 +1,5 @@
 import AppKit
+import QuickLookThumbnailing
 import SwiftUI
 
 enum Palette {
@@ -50,7 +51,12 @@ struct NotchRootView: View {
         case .collapsed: return n
         case .peek: return CGSize(width: max(n.width + 90, 250), height: n.height + 30)
         case .open: return CGSize(width: 460, height: n.height + 196)
-        case .activity: return CGSize(width: 400, height: n.height + 78)
+        case .activity:
+            switch app.activity {
+            case .received(let files, _) where !files.isEmpty: return CGSize(width: 420, height: n.height + 150)
+            case .incoming: return CGSize(width: 420, height: n.height + 84)
+            default: return CGSize(width: 400, height: n.height + 78)
+            }
         }
     }
 
@@ -92,9 +98,12 @@ struct NotchRootView: View {
             PeekView(name: app.peerName, paired: app.peer != nil)
                 .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .top)))
         case .open:
-            OpenView(app: app, targeted: ui.dropHover)
+            OpenView(app: app, targeted: ui.dropHover, onClick: ui.onClickDropBox)
                 .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.92, anchor: .top)).animation(.spring(response: 0.4, dampingFraction: 0.8).delay(0.05)),
-                                        removal: .opacity.animation(.easeOut(duration: 0.12))))
+                                        removal: ui.justDropped
+                                            // Sucked up into the notch.
+                                            ? .scale(scale: 0.05, anchor: .top).combined(with: .opacity).animation(.easeIn(duration: 0.28))
+                                            : .opacity.animation(.easeOut(duration: 0.12))))
         case .activity:
             ActivityView(app: app)
                 .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
@@ -169,6 +178,7 @@ struct PeekView: View {
 struct OpenView: View {
     @ObservedObject var app: AppModel
     var targeted: Bool
+    var onClick: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 12) {
@@ -187,12 +197,16 @@ struct OpenView: View {
 
             DropBox(title: app.peer == nil ? "Pair a phone from the menu bar first" : "Drop to share to \(app.peerName)",
                     targeted: targeted && app.peer != nil)
+                .contentShape(Rectangle())
+                .onTapGesture { onClick?() }
                 .padding(.horizontal, 18)
                 .padding(.bottom, 18)
         }
     }
 }
 
+/// The dashed drop target. While something hovers over it, the outline turns into a marching
+/// blue–violet gradient, the box breathes, and particles stream into a glowing core.
 struct DropBox: View {
     var title: String
     var targeted: Bool
@@ -200,23 +214,32 @@ struct DropBox: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 60, paused: !targeted)) { tl in
             let t = tl.date.timeIntervalSinceReferenceDate
-            let phase = targeted ? CGFloat((t * 28).truncatingRemainder(dividingBy: 13)) : 0
+            let dash = targeted ? CGFloat((t * 46).truncatingRemainder(dividingBy: 13)) : 0
+            let breath = targeted ? 0.985 - 0.012 * CGFloat(sin(t * 5)) : 1
             ZStack {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
                     .fill(targeted
-                          ? AnyShapeStyle(LinearGradient(colors: [Palette.accent.opacity(0.22), Palette.accent2.opacity(0.18)],
+                          ? AnyShapeStyle(LinearGradient(colors: [Palette.accent.opacity(0.2), Palette.accent2.opacity(0.16)],
                                                          startPoint: .topLeading, endPoint: .bottomTrailing))
                           : AnyShapeStyle(Color.white.opacity(0.04)))
+                if targeted {
+                    SuctionField(time: t)
+                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .transition(.opacity)
+                }
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(style: StrokeStyle(lineWidth: targeted ? 2 : 1.5, lineCap: .round, dash: [7, 6], dashPhase: -phase))
+                    .strokeBorder(style: StrokeStyle(lineWidth: targeted ? 2.2 : 1.5, lineCap: .round, dash: [7, 6], dashPhase: dash))
                     .foregroundStyle(targeted
-                                     ? AnyShapeStyle(LinearGradient(colors: [Palette.accent, Palette.accent2], startPoint: .leading, endPoint: .trailing))
+                                     ? AnyShapeStyle(AngularGradient(colors: [Palette.accent, Palette.accent2, Palette.accent],
+                                                                     center: .center, angle: .degrees(t * 90)))
                                      : AnyShapeStyle(Color.white.opacity(0.3)))
+                    .shadow(color: targeted ? Palette.accent2.opacity(0.6) : .clear, radius: 6)
                 VStack(spacing: 8) {
                     ZStack {
                         Circle()
                             .fill(targeted ? Palette.accent : Color.white.opacity(0.08))
                             .frame(width: 38, height: 38)
+                            .shadow(color: targeted ? Palette.accent.opacity(0.8) : .clear, radius: 10)
                         Image(systemName: "arrow.up")
                             .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(targeted ? .white : .white.opacity(0.8))
@@ -227,13 +250,51 @@ struct DropBox: View {
                         .foregroundStyle(.white)
                     Text("Files · Photos · Folders · Links · Text")
                         .font(.system(size: 10.5, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.42))
+                        .foregroundStyle(.white.opacity(targeted ? 0 : 0.42))
                 }
             }
-            .scaleEffect(targeted ? 1.02 : 1)
+            .scaleEffect(breath)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: targeted)
         }
         .frame(height: 118)
+    }
+}
+
+/// Particles drifting from the edges toward the center, over a pulsing glow.
+struct SuctionField: View {
+    var time: Double
+    private static let seeds: [(angle: Double, speed: Double, offset: Double, size: Double)] = (0..<34).map { i in
+        let g = Double(i) * 2.399963 // golden angle spreads them evenly
+        return (g, 0.55 + Double((i * 37) % 11) / 20, Double((i * 53) % 97) / 97, 1.4 + Double((i * 17) % 5) / 3)
+    }
+
+    var body: some View {
+        Canvas { ctx, size in
+            let c = CGPoint(x: size.width / 2, y: size.height / 2)
+            let pulse = 0.5 + 0.5 * sin(time * 5)
+            let glowR = 30 + 10 * pulse
+            ctx.fill(Path(ellipseIn: CGRect(x: c.x - glowR * 2, y: c.y - glowR, width: glowR * 4, height: glowR * 2)),
+                     with: .radialGradient(Gradient(colors: [Palette.accent2.opacity(0.45), Palette.accent.opacity(0.15), .clear]),
+                                           center: c, startRadius: 0, endRadius: glowR * 2))
+            let rx = size.width / 2 + 10, ry = size.height / 2 + 10
+            for s in Self.seeds {
+                // p goes 0 → 1 as a particle travels from the rim to the center, accelerating.
+                let p = (time * s.speed * 0.7 + s.offset).truncatingRemainder(dividingBy: 1)
+                let d = pow(1 - p, 1.6)
+                let a = s.angle + p * 0.9 // slight swirl
+                let pt = CGPoint(x: c.x + cos(a) * rx * d, y: c.y + sin(a) * ry * d)
+                let r = s.size * (0.4 + d)
+                let alpha = min(1, p * 4) * (1 - p) * 0.9
+                let color = p < 0.5 ? Palette.accent : Palette.accent2
+                ctx.fill(Path(ellipseIn: CGRect(x: pt.x - r, y: pt.y - r, width: r * 2, height: r * 2)), with: .color(color.opacity(alpha)))
+                // Short streak behind each particle.
+                var streak = Path()
+                streak.move(to: pt)
+                streak.addLine(to: CGPoint(x: c.x + cos(a) * rx * min(1, d * 1.18), y: c.y + sin(a) * ry * min(1, d * 1.18)))
+                ctx.stroke(streak, with: .color(color.opacity(alpha * 0.35)), lineWidth: r * 0.8)
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 
@@ -241,6 +302,19 @@ struct ActivityView: View {
     @ObservedObject var app: AppModel
 
     var body: some View {
+        VStack(spacing: 10) {
+            row
+            if case .received(let files, _) = app.activity, !files.isEmpty {
+                ThumbnailStrip(files: files) { app.dismissActivity() }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 10)
+        .padding(.bottom, 14)
+    }
+
+    private var row: some View {
         HStack(spacing: 14) {
             icon.frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 5) {
@@ -261,9 +335,6 @@ struct ActivityView: View {
             Spacer(minLength: 0)
             actions
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 10)
-        .padding(.bottom, 14)
     }
 
     @ViewBuilder private var icon: some View {
@@ -285,6 +356,12 @@ struct ActivityView: View {
                 .symbolEffect(.bounce, value: app.activity)
         case .failed:
             Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 24)).foregroundStyle(Palette.bad)
+        case .incoming:
+            ZStack {
+                PhoneGlyph(color: Palette.accent, size: 26)
+                Image(systemName: "arrow.down").font(.system(size: 9, weight: .heavy)).foregroundStyle(Palette.accent).offset(y: 3)
+            }
+            .symbolEffect(.pulse)
         case .idle:
             EmptyView()
         }
@@ -301,6 +378,7 @@ struct ActivityView: View {
             if files.isEmpty { return texts.count == 1 ? "Copied text from \(name)" : "Received \(texts.count) texts" }
             return "Received \(files.count) file\(files.count == 1 ? "" : "s") from \(name)"
         case .failed: return "Couldn't send"
+        case .incoming: return "\(name) wants to send"
         case .idle: return ""
         }
     }
@@ -310,8 +388,9 @@ struct ActivityView: View {
         case .sending(let n, _, _), .receiving(let n, _): return n.isEmpty ? nil : n
         case .received(let files, let texts):
             if files.isEmpty { return texts.last }
-            return files.count == 1 ? files[0].lastPathComponent : "Saved to Downloads/\(files[0].deletingLastPathComponent().lastPathComponent)"
+            return files.count == 1 ? files[0].lastPathComponent : "Saved to \(files[0].deletingLastPathComponent().lastPathComponent)"
         case .failed(let m): return m
+        case .incoming(let summary): return summary
         default: return nil
         }
     }
@@ -326,17 +405,94 @@ struct ActivityView: View {
     @ViewBuilder private var actions: some View {
         if case .received(let files, let texts) = app.activity {
             HStack(spacing: 6) {
-                if let url = texts.last.flatMap(URL.init(string:)), url.scheme?.hasPrefix("http") == true {
-                    PillButton(title: "Open") { NSWorkspace.shared.open(url); app.dismissActivity() }
-                } else if !files.isEmpty {
-                    PillButton(title: "Show") {
+                if let url = texts.last.flatMap({ URL(string: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }),
+                   url.scheme?.hasPrefix("http") == true {
+                    PillButton(title: "Open Link") { NSWorkspace.shared.open(url); app.dismissActivity() }
+                } else if files.count > 1 {
+                    PillButton(title: "Show All") {
                         NSWorkspace.shared.activateFileViewerSelecting(files)
                         app.dismissActivity()
                     }
                 }
             }
+        } else if case .incoming = app.activity {
+            HStack(spacing: 6) {
+                PillButton(title: "Decline") { app.answerIncoming(false) }
+                PillButton(title: "Accept", tint: Palette.accent) { app.answerIncoming(true) }
+            }
         } else if case .failed = app.activity {
             PillButton(title: "OK") { app.dismissActivity() }
+        }
+    }
+}
+
+/// Received files as thumbnails; clicking one reveals it in Finder.
+struct ThumbnailStrip: View {
+    var files: [URL]
+    var onReveal: () -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(files.prefix(12), id: \.self) { url in
+                    Thumbnail(url: url)
+                        .onTapGesture {
+                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                            onReveal()
+                        }
+                        .help(url.lastPathComponent)
+                }
+                if files.count > 12 {
+                    Text("+\(files.count - 12)")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Palette.dim)
+                        .frame(width: 52, height: 52)
+                }
+            }
+        }
+        .frame(height: 60)
+    }
+}
+
+struct Thumbnail: View {
+    var url: URL
+    @StateObject private var loader = ThumbnailLoader()
+    @StateObject private var hover = HoverState()
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.08))
+            if let img = loader.image {
+                Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
+            } else {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: url.path)).resizable().padding(8)
+            }
+        }
+        .frame(width: 52, height: 52)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(Color.white.opacity(hover.on ? 0.6 : 0.12), lineWidth: 1))
+        .scaleEffect(hover.on ? 1.06 : 1)
+        .animation(.easeOut(duration: 0.12), value: hover.on)
+        .onHover { hover.on = $0 }
+        .onAppear { loader.load(url) }
+    }
+}
+
+@MainActor
+final class ThumbnailLoader: ObservableObject {
+    @Published var image: NSImage?
+    private var started = false
+
+    func load(_ url: URL) {
+        guard !started else { return }
+        started = true
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        let req = QLThumbnailGenerator.Request(fileAt: url, size: CGSize(width: 104, height: 104), scale: scale, representationTypes: .thumbnail)
+        QLThumbnailGenerator.shared.generateBestRepresentation(for: req) { rep, _ in
+            guard let cg = rep?.cgImage else { return }
+            let img = NSImage(cgImage: cg, size: .zero)
+            DispatchQueue.main.async { self.image = img }
         }
     }
 }
@@ -360,6 +516,7 @@ struct ProgressBar: View {
 
 struct PillButton: View {
     var title: String
+    var tint: Color? = nil
     var action: () -> Void
     @StateObject private var hover = HoverState()
 
@@ -370,7 +527,8 @@ struct PillButton: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(Capsule().fill(Color.white.opacity(hover.on ? 0.22 : 0.13)))
+                .background(Capsule().fill(tint.map { AnyShapeStyle($0.opacity(hover.on ? 1 : 0.85)) }
+                    ?? AnyShapeStyle(Color.white.opacity(hover.on ? 0.22 : 0.13))))
         }
         .buttonStyle(.plain)
         .onHover { hover.on = $0 }

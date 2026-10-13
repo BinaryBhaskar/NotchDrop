@@ -8,6 +8,7 @@ enum Activity: Equatable {
     case sent(count: Int)
     case receiving(name: String, fraction: Double)
     case received(files: [URL], texts: [String])
+    case incoming(summary: String)
     case failed(String)
 }
 
@@ -33,6 +34,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var justPaired = false
 
     let store = Store.shared
+    let prefs = Prefs.shared
+    private var pendingConfirm: CheckedContinuation<Bool, Never>?
     private let browser = PeerBrowser()
     private var server: ProtocolServer?
     private var bridge: Bridge?
@@ -44,7 +47,7 @@ final class AppModel: ObservableObject {
     var peerName: String { peer?.displayName ?? "Phone" }
     var isBusy: Bool {
         switch activity {
-        case .connecting, .sending, .receiving: return true
+        case .connecting, .sending, .receiving, .incoming: return true
         default: return false
         }
     }
@@ -218,18 +221,29 @@ final class AppModel: ObservableObject {
                 try await Transfer.send(items, over: c.channel) { throttle($0, $1, $2) }
                 try? await c.channel.send(json: ["t": "bye"])
                 setActivity(.sent(count: items.count), resetAfter: 2.2)
+                prefs.play("Pop")
             } catch {
                 setActivity(.failed(failureMessage(error)), resetAfter: 4)
+                prefs.play("Funk")
             }
         }
     }
 
     func sendClipboard() {
-        let pb = NSPasteboard.general
-        if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
-            send(urls: urls, texts: [])
-        } else if let s = pb.string(forType: .string), !s.isEmpty {
-            send(urls: [], texts: [s])
+        send(SelectionGrabber.read(.general))
+    }
+
+    /// Hotkey action: Finder selection, else the front app's selected text, else the clipboard.
+    func sendSelection() {
+        guard store.peer != nil else { NSSound.beep(); return }
+        Task { send(await SelectionGrabber.grab()) }
+    }
+
+    private func send(_ g: SelectionGrabber.Grab) {
+        switch g {
+        case .files(let urls): send(urls: urls, texts: [])
+        case .texts(let texts): send(urls: [], texts: texts)
+        case .nothing: NSSound.beep()
         }
     }
 
@@ -247,11 +261,53 @@ final class AppModel: ObservableObject {
     }
 
     fileprivate func incomingFinished(_ batch: ReceivedBatch) {
-        if let text = batch.texts.last {
+        if let text = batch.texts.last, prefs.copyText {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
         }
-        setActivity(.received(files: batch.files, texts: batch.texts), resetAfter: 6)
+        if prefs.openLinks {
+            for t in batch.texts {
+                if let url = URL(string: t.trimmingCharacters(in: .whitespacesAndNewlines)), url.scheme?.hasPrefix("http") == true {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+        }
+        setActivity(.received(files: batch.files, texts: batch.texts), resetAfter: batch.files.isEmpty ? 6 : 10)
+        prefs.play("Glass")
+    }
+
+    /// Shows Accept/Decline in the notch (or an alert when the notch is off). Declines after 45 s.
+    fileprivate func confirmIncoming(_ summary: String) async -> Bool {
+        guard prefs.confirmReceive else { return true }
+        pendingConfirm?.resume(returning: false)
+        if !prefs.notchEnabled { return confirmWithAlert(summary) }
+        prefs.play("Tink")
+        setActivity(.incoming(summary: summary))
+        let token = resetToken
+        Task {
+            try? await Task.sleep(nanoseconds: 45_000_000_000)
+            if token == resetToken { answerIncoming(false) }
+        }
+        return await withCheckedContinuation { pendingConfirm = $0 }
+    }
+
+    func answerIncoming(_ accept: Bool) {
+        guard let c = pendingConfirm else { return }
+        pendingConfirm = nil
+        setActivity(accept ? .receiving(name: "", fraction: 0) : .idle)
+        c.resume(returning: accept)
+    }
+
+    private func confirmWithAlert(_ summary: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "\(peerName) wants to send \(summary)"
+        alert.addButton(withTitle: "Accept")
+        alert.addButton(withTitle: "Decline")
+        let timer = Timer(timeInterval: 45, repeats: false) { _ in NSApp.abortModal() }
+        RunLoop.main.add(timer, forMode: .modalPanel)
+        NSApp.activate(ignoringOtherApps: true)
+        defer { timer.invalidate() }
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     fileprivate func incomingFailed(_ error: Error) {
@@ -314,6 +370,25 @@ private final class Bridge: SessionDelegate, @unchecked Sendable {
 
     func incomingFailed(_ error: Error) {
         Task { @MainActor in self.model?.incomingFailed(error) }
+    }
+
+    func shouldAccept(offer: [String: Any]) async -> Bool {
+        guard let model else { return false }
+        return await model.confirmIncoming(Self.summary(offer))
+    }
+
+    /// "photo.jpg", "3 files · 12 MB", or "a link".
+    static func summary(_ offer: [String: Any]) -> String {
+        let items = offer["items"] as? [[String: Any]] ?? []
+        let files = items.filter { $0["kind"] as? String == "file" }
+        let size = files.reduce(Int64(0)) { $0 + ((($1["size"] as? NSNumber)?.int64Value) ?? 0) }
+        let bytes = ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+        switch (files.count, items.count - files.count) {
+        case (0, 1): return "a link or text"
+        case (0, let t): return "\(t) texts"
+        case (1, 0): return "\(files[0]["name"] as? String ?? "a file") (\(bytes))"
+        default: return "\(items.count) items · \(bytes)"
+        }
     }
 }
 

@@ -1,8 +1,8 @@
-package app.notchdrop
+package com.amurot.notchdrop
 
 import android.app.Application
-import app.notchdrop.service.Node
-import app.notchdrop.service.Notifier
+import com.amurot.notchdrop.service.Node
+import com.amurot.notchdrop.service.Notifier
 
 class NotchDropApp : Application() {
     override fun onCreate() {

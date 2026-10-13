@@ -36,6 +36,11 @@
         </activity>
 
         <activity
+            android:name=".ui.SettingsActivity"
+            android:exported="false"
+            android:parentActivityName=".ui.MainActivity" />
+
+        <activity
             android:name=".ui.ScanActivity"
             android:exported="false"
             android:screenOrientation="portrait" />
@@ -46,7 +51,7 @@
             android:exported="true"
             android:excludeFromRecents="true"
             android:label="@string/share_label"
-            android:taskAffinity="app.notchdrop.share"
+            android:taskAffinity="com.amurot.notchdrop.share"
             android:theme="@style/Theme.NotchDrop.Sheet">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />

@@ -48,6 +48,8 @@ C: done                                              S: received {ok:true}
 C: ping → S: pong        C: bye        either: error {message}
 ```
 
+Instead of `accept`, the receiver may answer an offer with `error {message}`, for example when the user declines in the Mac's "Ask before receiving" prompt. The sender then reports that message and closes the connection. The Mac auto-declines after 45 s, well inside Android's 60 s read timeout.
+
 The receiver writes each file to a temp file, checks its SHA-256, then moves it into place. On the Mac that is `~/Downloads/From <phone>`; on Android it is `Download/From <Mac>` via MediaStore.
 
 ## Reaching the other device

@@ -11,6 +11,12 @@ protocol SessionDelegate: AnyObject {
     func incomingProgress(done: Int64, total: Int64, name: String)
     func incomingFinished(_ batch: ReceivedBatch)
     func incomingFailed(_ error: Error)
+    /// Asked before each incoming offer is accepted.
+    func shouldAccept(offer: [String: Any]) async -> Bool
+}
+
+extension SessionDelegate {
+    func shouldAccept(offer: [String: Any]) async -> Bool { true }
 }
 
 final class ProtocolServer: @unchecked Sendable {
@@ -96,6 +102,10 @@ final class ProtocolServer: @unchecked Sendable {
                 case "bye":
                     break loop
                 case "offer":
+                    guard await d.shouldAccept(offer: msg) else {
+                        try await ch.send(json: ["t": "error", "message": "Declined on the Mac"])
+                        break loop
+                    }
                     inTransfer = true
                     let throttle = ProgressThrottle { d.incomingProgress(done: $0, total: $1, name: $2) }
                     let batch = try await Transfer.receive(offer: msg, over: ch, saveDir: d.saveDirectory()) {

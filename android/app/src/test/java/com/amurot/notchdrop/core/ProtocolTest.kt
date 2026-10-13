@@ -1,6 +1,6 @@
-package app.notchdrop.core
+package com.amurot.notchdrop.core
 
-import app.notchdrop.core.Transfer.toHex
+import com.amurot.notchdrop.core.Transfer.toHex
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals

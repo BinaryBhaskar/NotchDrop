@@ -1,4 +1,4 @@
-package app.notchdrop.ui
+package com.amurot.notchdrop.ui
 
 import android.Manifest
 import android.content.ClipData
@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
@@ -42,19 +43,15 @@ import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.BatteryAlert
 import androidx.compose.material.icons.rounded.ContentPaste
-import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Laptop
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.UploadFile
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -74,13 +71,13 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
-import app.notchdrop.core.OutgoingItem
-import app.notchdrop.service.Activity
-import app.notchdrop.service.HistoryEntry
-import app.notchdrop.service.Node
-import app.notchdrop.service.NodeService
-import app.notchdrop.service.NodeState
-import app.notchdrop.service.Outgoing
+import com.amurot.notchdrop.core.OutgoingItem
+import com.amurot.notchdrop.service.Activity
+import com.amurot.notchdrop.service.HistoryEntry
+import com.amurot.notchdrop.service.Node
+import com.amurot.notchdrop.service.NodeService
+import com.amurot.notchdrop.service.NodeState
+import com.amurot.notchdrop.service.Outgoing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -91,11 +88,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
         setContent {
             NotchTheme {
+                SystemBars(this)
                 val state by Node.state.collectAsStateWithLifecycle()
                 MainScreen(
                     state = state,
@@ -104,14 +104,7 @@ class MainActivity : ComponentActivity() {
                     onSendUris = ::sendUris,
                     onSendClipboard = ::sendClipboard,
                     onRefresh = { Node.scheduleRefresh(0) },
-                    onReceiveToggle = { on ->
-                        Node.store.receiveEnabled = on
-                        if (on) NodeService.start(this) else NodeService.stop(this)
-                    },
-                    onUnpair = {
-                        Node.unpair()
-                        NodeService.stop(this)
-                    },
+                    onSettings = { startActivity(Intent(this, SettingsActivity::class.java)) },
                     onBattery = {
                         startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
                     },
@@ -119,8 +112,6 @@ class MainActivity : ComponentActivity() {
                         Node.store.batteryPromptDismissed = true
                         batteryOk = true
                     },
-                    onRenameDevice = Node::renameThisDevice,
-                    onRenamePeer = Node::renamePeer,
                     onOpenEntry = ::openEntry,
                     onDismissActivity = Node::dismissActivity,
                 )
@@ -130,10 +121,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        Node.uiVisible = true
         NodeService.start(this)
         Node.scheduleRefresh(0)
         batteryOk = Node.store.batteryPromptDismissed ||
             getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        Node.uiVisible = false
     }
 
     private fun sendUris(uris: List<Uri>) {
@@ -179,20 +176,14 @@ private fun MainScreen(
     onSendUris: (List<Uri>) -> Unit,
     onSendClipboard: () -> Unit,
     onRefresh: () -> Unit,
-    onReceiveToggle: (Boolean) -> Unit,
-    onUnpair: () -> Unit,
+    onSettings: () -> Unit,
     onBattery: () -> Unit,
     onDismissBattery: () -> Unit,
-    onRenameDevice: (String?) -> Unit,
-    onRenamePeer: (String?) -> Unit,
     onOpenEntry: (HistoryEntry) -> Unit,
     onDismissActivity: () -> Unit,
 ) {
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { onSendUris(it) }
     val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { onSendUris(it) }
-    var receive by remember { mutableStateOf(Node.store.receiveEnabled) }
-    var confirmUnpair by remember { mutableStateOf(false) }
-    var renaming by remember { mutableStateOf<RenameTarget?>(null) }
 
     LazyColumn(
         Modifier.fillMaxSize().background(Palette.bg).safeDrawingPadding(),
@@ -201,11 +192,12 @@ private fun MainScreen(
     ) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("NotchDrop", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text("NotchDrop", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Palette.text)
                 Spacer(Modifier.weight(1f))
                 if (state.peer != null) {
                     IconButton(onClick = onRefresh) { Icon(Icons.Rounded.Refresh, "Refresh", tint = Palette.dim) }
                 }
+                IconButton(onClick = onSettings) { Icon(Icons.Rounded.Settings, "Settings", tint = Palette.dim) }
             }
         }
 
@@ -243,7 +235,7 @@ private fun MainScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Rounded.BatteryAlert, null, tint = Palette.warn)
                         Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                            Text("Allow background receiving", color = Color.White, fontWeight = FontWeight.SemiBold)
+                            Text("Allow background receiving", color = Palette.text, fontWeight = FontWeight.SemiBold)
                             Text("Battery saving may pause NotchDrop, so the Mac can't reach it.", color = Palette.dim, fontSize = 13.sp)
                         }
                     }
@@ -261,98 +253,7 @@ private fun MainScreen(
             }
             items(state.history.take(20)) { e -> HistoryRow(e) { onOpenEntry(e) } }
         }
-
-        item {
-            Card {
-                NameRow("This phone", state.deviceName) { renaming = RenameTarget.Device }
-                if (state.peer != null) {
-                    NameRow("Paired Mac", state.peer.displayName) { renaming = RenameTarget.Peer }
-                }
-            }
-        }
-
-        if (state.peer != null) {
-            item {
-                Card {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Receive from Mac", color = Color.White, fontWeight = FontWeight.SemiBold)
-                            Text("Keeps a small notification so your Mac can send anytime", color = Palette.dim, fontSize = 13.sp)
-                        }
-                        Switch(
-                            checked = receive,
-                            onCheckedChange = { receive = it; onReceiveToggle(it) },
-                            colors = SwitchDefaults.colors(checkedTrackColor = Palette.accent),
-                        )
-                    }
-                }
-            }
-            item {
-                TextButton(onClick = { confirmUnpair = true }) { Text("Unpair ${state.peer.displayName}", color = Palette.bad) }
-            }
-        }
     }
-
-    when (renaming) {
-        RenameTarget.Device -> RenameDialog(
-            title = "Name this phone",
-            hint = "Shown on your Mac. Leave empty to use “${Node.store.systemName}”.",
-            initial = Node.store.customName.orEmpty(),
-            onDismiss = { renaming = null },
-            onSave = { renaming = null; onRenameDevice(it) },
-        )
-        RenameTarget.Peer -> RenameDialog(
-            title = "Nickname for your Mac",
-            hint = "Only used on this phone. Leave empty to use “${state.peer?.name.orEmpty()}”.",
-            initial = state.peer?.alias.orEmpty(),
-            onDismiss = { renaming = null },
-            onSave = { renaming = null; onRenamePeer(it) },
-        )
-        null -> {}
-    }
-
-    if (confirmUnpair) {
-        AlertDialog(
-            onDismissRequest = { confirmUnpair = false },
-            title = { Text("Unpair?") },
-            text = { Text("You'll need to scan the QR code on your Mac again to reconnect.") },
-            confirmButton = { TextButton(onClick = { confirmUnpair = false; onUnpair() }) { Text("Unpair", color = Palette.bad) } },
-            dismissButton = { TextButton(onClick = { confirmUnpair = false }) { Text("Cancel") } },
-        )
-    }
-}
-
-private enum class RenameTarget { Device, Peer }
-
-@Composable
-private fun NameRow(label: String, value: String, onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick).padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(label, color = Palette.dim, fontSize = 13.sp)
-            Text(value, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        Icon(Icons.Rounded.Edit, "Rename", tint = Palette.dim, modifier = Modifier.size(18.dp))
-    }
-}
-
-@Composable
-private fun RenameDialog(title: String, hint: String, initial: String, onDismiss: () -> Unit, onSave: (String?) -> Unit) {
-    var text by remember { mutableStateOf(initial) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column {
-                OutlinedTextField(value = text, onValueChange = { text = it.take(40) }, singleLine = true)
-                Text(hint, color = Palette.dim, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
-            }
-        },
-        confirmButton = { TextButton(onClick = { onSave(text.trim().ifEmpty { null }) }) { Text("Save") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
 }
 
 @Composable
@@ -379,7 +280,7 @@ private fun MacCard(state: NodeState, onScan: () -> Unit) {
         ) { Icon(Icons.Rounded.Laptop, null, tint = Palette.accent, modifier = Modifier.size(34.dp)) }
         Spacer(Modifier.height(14.dp))
         if (peer == null) {
-            Text("Pair with your Mac", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text("Pair with your Mac", color = Palette.text, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(6.dp))
             Text(
                 "On the Mac, choose Pair Phone… from the NotchDrop menu-bar icon, then scan the code. " +
@@ -399,7 +300,7 @@ private fun MacCard(state: NodeState, onScan: () -> Unit) {
                 Text("Scan to pair", fontWeight = FontWeight.SemiBold)
             }
         } else {
-            Text(peer.displayName, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(peer.displayName, color = Palette.text, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(8.dp))
             StatusChip(state)
         }
@@ -453,7 +354,7 @@ private fun ActionTile(icon: ImageVector, label: String, modifier: Modifier, ena
     ) {
         Icon(icon, null, tint = if (enabled) Palette.accent else Palette.dim)
         Spacer(Modifier.height(6.dp))
-        Text(label, color = if (enabled) Color.White else Palette.dim, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Text(label, color = if (enabled) Palette.text else Palette.dim, fontSize = 13.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -468,7 +369,7 @@ private fun HistoryRow(e: HistoryEntry, onClick: () -> Unit) {
             Icon(if (e.incoming) Icons.Rounded.ArrowDownward else Icons.Rounded.ArrowUpward, null, tint = color, modifier = Modifier.size(18.dp))
         }
         Column(Modifier.weight(1f).padding(start = 12.dp)) {
-            Text(e.title, color = Color.White, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(e.title, color = Palette.text, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 "${e.detail} · ${DateUtils.getRelativeTimeSpanString(e.time, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)}",
                 color = Palette.dim, fontSize = 12.sp,

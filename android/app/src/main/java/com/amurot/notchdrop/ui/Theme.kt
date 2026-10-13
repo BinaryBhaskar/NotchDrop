@@ -1,5 +1,8 @@
-package app.notchdrop.ui
+package com.amurot.notchdrop.ui
 
+import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -8,6 +11,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,8 +22,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,39 +44,68 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.notchdrop.service.Activity
-import app.notchdrop.service.NodeState
-import app.notchdrop.service.Route
+import com.amurot.notchdrop.service.Activity
+import com.amurot.notchdrop.service.Node
+import com.amurot.notchdrop.service.NodeState
+import com.amurot.notchdrop.service.Route
 
-/** Same palette as the Mac notch UI. */
+/** Same palette as the Mac notch UI. Neutrals follow the light/dark setting; accents stay the same. */
 object Palette {
-    val bg = Color(0xFF0E0F13)
-    val surface = Color(0xFF17191F)
-    val surface2 = Color(0xFF1F222A)
-    val line = Color(0x1FFFFFFF)
+    var dark by mutableStateOf(true)
+
+    val bg get() = if (dark) Color(0xFF0E0F13) else Color(0xFFF4F5F8)
+    val surface get() = if (dark) Color(0xFF17191F) else Color.White
+    val surface2 get() = if (dark) Color(0xFF1F222A) else Color(0xFFECEEF2)
+    val line get() = if (dark) Color(0x1FFFFFFF) else Color(0x14000000)
+    val text get() = if (dark) Color.White else Color(0xFF14161B)
+    val dim get() = if (dark) Color(0x8CFFFFFF) else Color(0x99000000)
     val accent = Color(0xFF5C94FF)
     val accent2 = Color(0xFF9E73FF)
     val ok = Color(0xFF4DD97A)
     val warn = Color(0xFFFF9E40)
     val bad = Color(0xFFFF6161)
-    val dim = Color(0x8CFFFFFF)
     val gradient = Brush.linearGradient(listOf(accent, accent2))
 }
 
+enum class ThemeMode { System, Dark, Light }
+
 @Composable
 fun NotchTheme(content: @Composable () -> Unit) {
+    val mode by Node.themeMode.collectAsState()
+    val dark = when (mode) {
+        ThemeMode.System -> isSystemInDarkTheme()
+        ThemeMode.Dark -> true
+        ThemeMode.Light -> false
+    }
+    Palette.dark = dark
+    val base = if (dark) darkColorScheme() else lightColorScheme()
     MaterialTheme(
-        colorScheme = darkColorScheme(
+        colorScheme = base.copy(
             primary = Palette.accent,
             secondary = Palette.accent2,
             background = Palette.bg,
             surface = Palette.surface,
             surfaceVariant = Palette.surface2,
             onPrimary = Color.White,
+            onBackground = Palette.text,
+            onSurface = Palette.text,
             error = Palette.bad,
         ),
         content = content,
     )
+}
+
+/** Status/navigation bar icons that match the current theme. */
+@Composable
+fun SystemBars(activity: ComponentActivity) {
+    val dark = Palette.dark
+    LaunchedEffect(dark) {
+        val t = android.graphics.Color.TRANSPARENT
+        activity.enableEdgeToEdge(
+            statusBarStyle = if (dark) SystemBarStyle.dark(t) else SystemBarStyle.light(t, t),
+            navigationBarStyle = if (dark) SystemBarStyle.dark(t) else SystemBarStyle.light(t, t),
+        )
+    }
 }
 
 /** Dashed rounded outline that marches while [active], echoing the Mac drop box. */
@@ -114,7 +152,7 @@ fun StatusChip(state: NodeState, modifier: Modifier = Modifier) {
 @Composable
 fun ProgressBar(fraction: Float?, modifier: Modifier = Modifier) {
     val anim by animateFloatAsState(fraction ?: 0f, label = "progress")
-    Box(modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.08f))) {
+    Box(modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(Palette.line)) {
         if (fraction == null) {
             val t = rememberInfiniteTransition(label = "indeterminate")
             val x by t.animateFloat(0f, 1f, infiniteRepeatable(tween(1100, easing = LinearEasing)), label = "x")
