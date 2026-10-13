@@ -1,0 +1,226 @@
+package app.notchdrop.ui
+
+import android.content.ClipboardManager
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Laptop
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
+import app.notchdrop.core.OutgoingItem
+import app.notchdrop.service.Activity
+import app.notchdrop.service.Node
+import app.notchdrop.service.NodeState
+import app.notchdrop.service.Outgoing
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+private sealed interface Phase {
+    data object Preparing : Phase
+    data object Working : Phase
+    data class Done(val summary: String) : Phase
+    data class Failed(val message: String) : Phase
+    data object NotPaired : Phase
+}
+
+/** Share-sheet target (and the clipboard tile): a small sheet that sends straight to the paired Mac. */
+class ShareActivity : ComponentActivity() {
+    companion object {
+        const val ACTION_SEND_CLIPBOARD = "app.notchdrop.SEND_CLIPBOARD"
+    }
+
+    private var phase by mutableStateOf<Phase>(Phase.Preparing)
+    private var items: List<OutgoingItem> = emptyList()
+    private var clipboardPending = false
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() = dismiss()
+        })
+        setContent {
+            NotchTheme {
+                val state by Node.state.collectAsStateWithLifecycle()
+                Sheet(state, phase, onDismiss = ::dismiss, onRetry = ::start, onOpenApp = {
+                    startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    finish()
+                })
+            }
+        }
+        if (Node.store.peer == null) {
+            phase = Phase.NotPaired
+            return
+        }
+        if (intent.action == ACTION_SEND_CLIPBOARD) {
+            clipboardPending = true // Clipboard can only be read once the window has focus.
+        } else {
+            lifecycleScope.launch {
+                items = withContext(Dispatchers.IO) { runCatching { collect(intent) }.getOrDefault(emptyList()) }
+                if (items.isEmpty()) phase = Phase.Failed("Nothing to send") else start()
+            }
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && clipboardPending) {
+            clipboardPending = false
+            val clip = getSystemService(ClipboardManager::class.java).primaryClip
+            val item = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)
+            lifecycleScope.launch {
+                items = withContext(Dispatchers.IO) {
+                    runCatching {
+                        when {
+                            item?.uri != null && item.text == null -> Outgoing.fromUris(this@ShareActivity, listOf(item.uri))
+                            else -> item?.coerceToText(this@ShareActivity)?.toString()?.takeIf { it.isNotBlank() }
+                                ?.let { listOf(OutgoingItem.Text(it)) }.orEmpty()
+                        }
+                    }.getOrDefault(emptyList())
+                }
+                if (items.isEmpty()) phase = Phase.Failed("Clipboard is empty") else start()
+            }
+        }
+    }
+
+    private fun collect(intent: Intent): List<OutgoingItem> {
+        val uris = when (intent.action) {
+            Intent.ACTION_SEND -> listOfNotNull(intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java))
+            Intent.ACTION_SEND_MULTIPLE -> intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
+            else -> emptyList()
+        }
+        if (uris.isNotEmpty()) return Outgoing.fromUris(this, uris)
+        val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()?.takeIf { it.isNotBlank() } ?: return emptyList()
+        return listOf(OutgoingItem.Text(text))
+    }
+
+    private fun start() {
+        if (items.isEmpty()) return
+        phase = Phase.Working
+        val summary = Outgoing.summary(items)
+        lifecycleScope.launch {
+            // Runs in Node's scope; this activity stays alive (backgrounded if dismissed) so shared URI grants hold.
+            val result = Node.scope.async { runCatching { Node.sendNow(items, summary) } }.await()
+            val a = Node.state.value.activity
+            phase = when {
+                a is Activity.Failed -> Phase.Failed(a.message)
+                result.isFailure -> Phase.Failed(result.exceptionOrNull()?.message ?: "Send failed")
+                else -> Phase.Done(summary)
+            }
+            if (phase is Phase.Done) {
+                delay(1100)
+                finish()
+            }
+        }
+    }
+
+    private fun dismiss() {
+        if (phase == Phase.Working) moveTaskToBack(true) else finish()
+    }
+}
+
+@Composable
+private fun Sheet(state: NodeState, phase: Phase, onDismiss: () -> Unit, onRetry: () -> Unit, onOpenApp: () -> Unit) {
+    val mac = state.peer?.displayName ?: "Mac"
+    Box(
+        Modifier.fillMaxSize().clickable(remember { MutableInteractionSource() }, indication = null, onClick = onDismiss),
+        contentAlignment = Alignment.BottomCenter,
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(10.dp).navigationBarsPadding()
+                .clip(RoundedCornerShape(30.dp)).background(Palette.surface)
+                .clickable(remember { MutableInteractionSource() }, indication = null) {}
+                .padding(22.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            val busy = phase == Phase.Working || phase == Phase.Preparing
+            Box(
+                Modifier.fillMaxWidth().height(120.dp)
+                    .dashedOutline(Palette.line, active = busy, radius = 22.dp, phase = marchingPhase()),
+                contentAlignment = Alignment.Center,
+            ) {
+                when (phase) {
+                    is Phase.Done -> Icon(Icons.Rounded.CheckCircle, null, tint = Palette.ok, modifier = Modifier.size(48.dp))
+                    is Phase.Failed, Phase.NotPaired -> Icon(Icons.Rounded.ErrorOutline, null, tint = Palette.bad, modifier = Modifier.size(44.dp))
+                    else -> Icon(Icons.Rounded.Laptop, null, tint = Palette.accent, modifier = Modifier.size(48.dp))
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            val a = state.activity
+            when (phase) {
+                Phase.NotPaired -> {
+                    Title("Not paired yet")
+                    Sub("Pair NotchDrop with your Mac first.")
+                    Spacer(Modifier.height(14.dp))
+                    Button(onClick = onOpenApp, colors = ButtonDefaults.buttonColors(containerColor = Palette.accent)) { Text("Open NotchDrop") }
+                }
+                is Phase.Failed -> {
+                    Title("Couldn't send to $mac")
+                    Sub(phase.message)
+                    Spacer(Modifier.height(14.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        TextButton(onClick = onDismiss) { Text("Close", color = Palette.dim) }
+                        Button(onClick = onRetry, colors = ButtonDefaults.buttonColors(containerColor = Palette.accent)) { Text("Retry") }
+                    }
+                }
+                is Phase.Done -> {
+                    Title("Sent to $mac")
+                    Sub(phase.summary)
+                }
+                else -> {
+                    Title(if (a is Activity.Sending) "Sending to $mac" else "Connecting to $mac…")
+                    Sub(if (a is Activity.Sending) "${a.name} · ${formatBytes(a.done)} of ${formatBytes(a.total)}" else "Same Wi-Fi or hotspot")
+                    Spacer(Modifier.height(14.dp))
+                    ProgressBar(if (a is Activity.Sending && a.total > 0) a.done.toFloat() / a.total else null)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Title(s: String) = Text(s, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+
+@Composable
+private fun Sub(s: String) = Text(s, color = Palette.dim, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))

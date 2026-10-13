@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- Normal permission; satisfies the connectedDevice foreground-service prerequisite. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <application
+        android:name=".NotchDropApp"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.NotchDrop">
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".ui.ScanActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <!-- Share-sheet target: a translucent sheet that sends straight to the Mac. -->
+        <activity
+            android:name=".ui.ShareActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:label="@string/share_label"
+            android:taskAffinity="app.notchdrop.share"
+            android:theme="@style/Theme.NotchDrop.Sheet">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".service.NodeService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <service
+            android:name=".service.ClipboardTile"
+            android:exported="true"
+            android:icon="@drawable/ic_tile"
+            android:label="@string/tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.ACTIVE_TILE"
+                android:value="false" />
+        </service>
+
+        <receiver
+            android:name=".service.BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".service.CopyReceiver"
+            android:exported="false" />
+    </application>
+</manifest>

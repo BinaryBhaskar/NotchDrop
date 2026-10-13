@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NotchDrop</string>
+    <string name="share_label">Send to Mac</string>
+    <string name="tile_label">Clipboard → Mac</string>
+</resources>

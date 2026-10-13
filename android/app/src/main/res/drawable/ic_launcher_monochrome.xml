@@ -1,0 +1,12 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- Themed-icon silhouette of the launcher glyph: notch, drop arrow, dashed tray. -->
+    <path android:fillColor="#FF000000"
+        android:pathData="M45.7,31h16.6a4.5,4.5 0,0 1,4.5 4.5a4.5,4.5 0,0 1,-4.5 4.5h-16.6a4.5,4.5 0,0 1,-4.5 -4.5a4.5,4.5 0,0 1,4.5 -4.5z" />
+    <path android:fillColor="#FF000000" android:strokeColor="#FF000000" android:strokeWidth="1.8"
+        android:strokeLineJoin="round"
+        android:pathData="M51.3,42.5h5.4v16.9h8l-10.7,9.6 -10.7,-9.6h8z" />
+    <path android:strokeColor="#FF000000" android:strokeWidth="1.6" android:fillColor="#00000000"
+        android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M42,52.5h-2a5,5 0,0 0,-5 5v12.5a5,5 0,0 0,5 5h28a5,5 0,0 0,5 -5v-12.5a5,5 0,0 0,-5 -5h-2" />
+</vector>
