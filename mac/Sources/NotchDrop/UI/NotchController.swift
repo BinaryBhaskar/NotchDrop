@@ -401,9 +401,14 @@ final class DropView: NSView {
         return accepts(sender) ? .copy : []
     }
 
+    /// The answer given while hovering. The drop itself relies on it: by the time `performDragOperation`
+    /// runs, mouse-up has already ended the drag and collapsed the notch, so a fresh check would refuse.
+    private var lastAccepted = false
+
     private func accepts(_ sender: NSDraggingInfo) -> Bool {
         guard let window else { return false }
-        return canAccept?(window.convertPoint(toScreen: sender.draggingLocation)) == true
+        lastAccepted = canAccept?(window.convertPoint(toScreen: sender.draggingLocation)) == true
+        return lastAccepted
     }
 
     private func report(_ sender: NSDraggingInfo) {
@@ -413,10 +418,12 @@ final class DropView: NSView {
 
     override func draggingExited(_ sender: NSDraggingInfo?) {
         onHover?(false)
+        lastAccepted = false
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard accepts(sender) else { return false }
+        guard lastAccepted else { return false }
+        lastAccepted = false
         let pb = sender.draggingPasteboard
         if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
             onDrop?(urls, [])
