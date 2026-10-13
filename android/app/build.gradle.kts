@@ -21,8 +21,8 @@ android {
         minSdk = 29
         // Stay on 35 so Android 17's opt-in local-network permission doesn't apply yet.
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.1.1"
         // 64-bit ARM covers modern phones and Apple-silicon emulators; keeps ML Kit's native libs small.
         ndk { abiFilters += "arm64-v8a" }
     }
@@ -40,7 +40,7 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName(if (releaseKeys != null) "release" else "debug")
         }
     }

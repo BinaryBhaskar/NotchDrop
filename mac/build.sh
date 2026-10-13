@@ -6,8 +6,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-VERSION=1.1.0
-BUILD=2
+VERSION=1.1.1
+BUILD=3
 MODE="${1:-}"
 
 if [[ "$MODE" == "release" ]]; then
