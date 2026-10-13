@@ -66,6 +66,19 @@
 | Android | Android 10 or later (API 29) |
 | Network | Same Wi-Fi network, **or** the Mac joined to the phone's hotspot |
 
+## Download
+
+Get the latest build from [Releases](https://github.com/BinaryBhaskar/NotchDrop/releases/latest):
+
+- **Mac:** `NotchDrop-<version>.dmg`, a universal build for Apple silicon and Intel. Open it and drag NotchDrop to Applications.
+- **Android:** `NotchDrop-<version>.apk`. Open it on the phone and allow installing from your browser or file manager if asked.
+
+The Mac app isn't notarized yet, so Gatekeeper blocks the first launch. To allow it:
+1. Open NotchDrop once and dismiss the warning.
+2. Go to *System Settings → Privacy & Security*, scroll down, and click **Open Anyway** next to NotchDrop.
+
+Or run `xattr -dr com.apple.quarantine /Applications/NotchDrop.app` in Terminal.
+
 ## Build & run
 
 ### Mac
@@ -74,6 +87,7 @@
 cd mac
 ./build.sh            # builds build/NotchDrop.app (ad-hoc signed)
 ./build.sh install    # also copies it to /Applications and launches it
+./build.sh release    # universal build, packaged as build/NotchDrop-<version>.dmg
 ```
 
 On first launch macOS asks for **Local Network** access; allow it. The pairing window opens automatically. After that, launching the app opens Settings.
@@ -86,7 +100,7 @@ Without them, the hotkey sends the clipboard instead. Ad-hoc builds get a new co
 
 Bundle IDs are `com.amurot.notchdrop` on both the Mac and Android.
 
-> The app is ad-hoc signed, not notarized. If Gatekeeper complains after you copy it to another Mac, right-click → **Open** once.
+> The app is ad-hoc signed, not notarized. On another Mac, allow it once as described in [Download](#download).
 
 ### Android
 
@@ -99,7 +113,7 @@ cd android
 ./gradlew :app:assembleRelease       # app/build/outputs/apk/release/app-release.apk
 ```
 
-The release build is signed with the local debug key so you can sideload it directly. Use your own signing config before distributing it.
+Release builds are signed with the key in `~/.notchdrop-keys/keystore.properties` (or the file named by `ND_KEYSTORE_PROPERTIES`). Without one, they fall back to the local debug key so you can still sideload them. CI signs with the `ND_KEYSTORE_BASE64` and `ND_KEYSTORE_PASSWORD` repository secrets.
 
 ### Pair
 

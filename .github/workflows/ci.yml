@@ -24,6 +24,19 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      - name: Android — release signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ND_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ND_KEYSTORE_PASSWORD }}
+        if: env.KEYSTORE_BASE64 != ''
+        run: |
+          KEYS="$RUNNER_TEMP/keys"
+          mkdir -p "$KEYS"
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$KEYS/release.jks"
+          printf 'storeFile=%s\nstorePassword=%s\nkeyAlias=notchdrop\nkeyPassword=%s\n' \
+            "$KEYS/release.jks" "$KEYSTORE_PASSWORD" "$KEYSTORE_PASSWORD" > "$KEYS/keystore.properties"
+          echo "ND_KEYSTORE_PROPERTIES=$KEYS/keystore.properties" >> "$GITHUB_ENV"
+
       - name: Android — unit tests (incl. Swift interop) & release build
         working-directory: android
         run: ./gradlew :app:testDebugUnitTest :app:assembleRelease

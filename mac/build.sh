@@ -2,11 +2,21 @@
 # Builds NotchDrop.app (release), ad-hoc signs it, and optionally installs to /Applications.
 #   ./build.sh            -> build/NotchDrop.app
 #   ./build.sh install    -> also copies to /Applications and relaunches
+#   ./build.sh release    -> universal (arm64 + x86_64) build, packaged as build/NotchDrop-<version>.dmg
 set -euo pipefail
 cd "$(dirname "$0")"
 
-swift build -c release
-BIN=$(swift build -c release --show-bin-path)/NotchDrop
+VERSION=1.1.0
+BUILD=2
+MODE="${1:-}"
+
+if [[ "$MODE" == "release" ]]; then
+  ARCHS=(--arch arm64 --arch x86_64)
+else
+  ARCHS=()
+fi
+swift build -c release "${ARCHS[@]}"
+BIN=$(swift build -c release "${ARCHS[@]}" --show-bin-path)/NotchDrop
 APP=build/NotchDrop.app
 
 rm -rf "$APP"
@@ -24,8 +34,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>com.amurot.notchdrop</string>
   <key>CFBundleExecutable</key><string>NotchDrop</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.1</string>
-  <key>CFBundleVersion</key><string>2</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$BUILD</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
@@ -40,7 +50,18 @@ PLIST
 codesign --force --deep --sign - "$APP"
 echo "Built $APP"
 
-if [[ "${1:-}" == "install" ]]; then
+if [[ "$MODE" == "release" ]]; then
+  DMG=build/NotchDrop-$VERSION.dmg
+  STAGE=$(mktemp -d)
+  cp -R "$APP" "$STAGE/"
+  ln -s /Applications "$STAGE/Applications"
+  rm -f "$DMG"
+  hdiutil create -volname "NotchDrop $VERSION" -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG" >/dev/null
+  rm -rf "$STAGE"
+  echo "Built $DMG"
+fi
+
+if [[ "$MODE" == "install" ]]; then
   pkill -x NotchDrop 2>/dev/null || true
   rm -rf /Applications/NotchDrop.app
   cp -R "$APP" /Applications/
