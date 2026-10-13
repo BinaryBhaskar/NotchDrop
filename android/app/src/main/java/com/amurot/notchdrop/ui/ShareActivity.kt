@@ -5,9 +5,16 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -20,18 +27,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.ErrorOutline
-import androidx.compose.material.icons.rounded.Laptop
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,7 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -78,9 +77,6 @@ class ShareActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() = dismiss()
-        })
         setContent {
             NotchTheme {
                 val state by Node.state.collectAsStateWithLifecycle()
@@ -164,13 +160,24 @@ class ShareActivity : ComponentActivity() {
 @Composable
 private fun Sheet(state: NodeState, phase: Phase, onDismiss: () -> Unit, onRetry: () -> Unit, onOpenApp: () -> Unit) {
     val mac = state.peer?.displayName ?: "Mac"
+    val back = rememberPredictiveBack(onBack = onDismiss)
+    // Rises into place on open; follows the back gesture down and in before dismissing.
+    val enter = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { enter.animateTo(1f, NdSprings.snappy()) }
     Box(
         Modifier.fillMaxSize().clickable(remember { MutableInteractionSource() }, indication = null, onClick = onDismiss),
         contentAlignment = Alignment.BottomCenter,
     ) {
         Column(
             Modifier.fillMaxWidth().padding(10.dp).navigationBarsPadding()
-                .clip(RoundedCornerShape(30.dp)).background(Palette.surface)
+                .graphicsLayer {
+                    val p = back.progress.value
+                    translationY = (1f - enter.value) * size.height + p * 48.dp.toPx()
+                    scaleX = 1f - 0.08f * p
+                    scaleY = 1f - 0.08f * p
+                    alpha = enter.value.coerceIn(0f, 1f)
+                }
+                .clip(NdShapes.sheet).background(Palette.surface).border(1.dp, Palette.line, NdShapes.sheet)
                 .clickable(remember { MutableInteractionSource() }, indication = null) {}
                 .padding(22.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -181,11 +188,14 @@ private fun Sheet(state: NodeState, phase: Phase, onDismiss: () -> Unit, onRetry
                     .dashedOutline(Palette.line, active = busy, radius = 22.dp, phase = marchingPhase()),
                 contentAlignment = Alignment.Center,
             ) {
-                when (phase) {
-                    is Phase.Done -> Icon(Icons.Rounded.CheckCircle, null, tint = Palette.ok, modifier = Modifier.size(48.dp))
-                    is Phase.Failed, Phase.NotPaired -> Icon(Icons.Rounded.ErrorOutline, null, tint = Palette.bad, modifier = Modifier.size(44.dp))
-                    else -> Icon(Icons.Rounded.Laptop, null, tint = Palette.accent, modifier = Modifier.size(48.dp))
+                val (icon, tint) = when (phase) {
+                    is Phase.Done -> NdIcons.Check to Palette.ok
+                    is Phase.Failed, Phase.NotPaired -> NdIcons.Warning to Palette.bad
+                    else -> NdIcons.Laptop to Palette.accent
                 }
+                AnimatedContent(icon to tint, transitionSpec = {
+                    scaleIn(NdSprings.snappy(), initialScale = 0.6f) + fadeIn() togetherWith scaleOut() + fadeOut()
+                }, label = "phaseIcon") { (i, t) -> NdIconTile(i, t, size = 64.dp) }
             }
             Spacer(Modifier.height(16.dp))
             val a = state.activity
@@ -193,16 +203,16 @@ private fun Sheet(state: NodeState, phase: Phase, onDismiss: () -> Unit, onRetry
                 Phase.NotPaired -> {
                     Title("Not paired yet")
                     Sub("Pair NotchDrop with your Mac first.")
-                    Spacer(Modifier.height(14.dp))
-                    Button(onClick = onOpenApp, colors = ButtonDefaults.buttonColors(containerColor = Palette.accent)) { Text("Open NotchDrop") }
+                    Spacer(Modifier.height(16.dp))
+                    NdButton("Open NotchDrop", onOpenApp, icon = NdIcons.Open)
                 }
                 is Phase.Failed -> {
                     Title("Couldn't send to $mac")
                     Sub(phase.message)
-                    Spacer(Modifier.height(14.dp))
+                    Spacer(Modifier.height(16.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        TextButton(onClick = onDismiss) { Text("Close", color = Palette.dim) }
-                        Button(onClick = onRetry, colors = ButtonDefaults.buttonColors(containerColor = Palette.accent)) { Text("Retry") }
+                        NdButton("Close", onDismiss, style = NdButtonStyle.Text)
+                        NdButton("Retry", onRetry, icon = NdIcons.Refresh)
                     }
                 }
                 is Phase.Done -> {

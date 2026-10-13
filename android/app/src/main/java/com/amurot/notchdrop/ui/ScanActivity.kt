@@ -26,14 +26,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -169,9 +162,7 @@ class ScanActivity : ComponentActivity() {
                 Modifier.align(Alignment.Center).size(260.dp)
                     .dashedOutline(Color.White.copy(alpha = 0.7f), active = phase == Phase.Pairing, radius = 32.dp, phase = marchingPhase()),
             )
-            IconButton(onClick = onClose, modifier = Modifier.safeDrawingPadding().padding(8.dp)) {
-                Icon(Icons.Rounded.Close, "Close", tint = Color.White)
-            }
+            NdIconButton(NdIcons.Close, "Close", onClose, Modifier.safeDrawingPadding().padding(12.dp), tint = Color.White)
             Column(
                 Modifier.align(Alignment.BottomCenter).safeDrawingPadding().padding(28.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -186,11 +177,11 @@ class ScanActivity : ComponentActivity() {
                         )
                     }
                     Phase.Pairing -> {
-                        CircularProgressIndicator(color = Palette.accent, modifier = Modifier.size(28.dp))
+                        ProgressBar(null, Modifier.width(140.dp))
                         Text("Pairing…", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                     }
                     is Phase.Paired -> {
-                        Icon(Icons.Rounded.CheckCircle, null, tint = Palette.ok, modifier = Modifier.size(44.dp))
+                        NdIconTile(NdIcons.Check, Palette.ok, size = 56.dp)
                         Text("Paired with ${phase.name}", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                     }
                     is Phase.Failed -> {
@@ -200,7 +191,7 @@ class ScanActivity : ComponentActivity() {
                             color = Color.White.copy(alpha = 0.75f), fontSize = 14.sp, textAlign = TextAlign.Center,
                         )
                         Spacer(Modifier.height(4.dp))
-                        Button(onClick = onRetry, colors = ButtonDefaults.buttonColors(containerColor = Palette.accent)) { Text("Try again") }
+                        NdButton("Try again", onRetry, icon = NdIcons.Refresh)
                     }
                 }
             }

@@ -213,7 +213,8 @@ struct LabeledSlider: View {
     var body: some View {
         HStack {
             Text(title).frame(width: 52, alignment: .leading)
-            Slider(value: $value, in: range, step: 10)
+            // No `step`: a stepped Slider draws tick marks. Round to whole points instead.
+            Slider(value: Binding(get: { value }, set: { value = $0.rounded() }), in: range)
             Text("\(Int(value)) pt").monospacedDigit().foregroundStyle(.secondary).frame(width: 56, alignment: .trailing)
         }
     }
@@ -226,8 +227,9 @@ struct ZonePreview: View {
 
     var body: some View {
         GeometryReader { g in
-            // Scale so the widest zone fits with a little margin.
-            let s = (g.size.width - 40) / Prefs.zoneWidthRange.upperBound
+            // Scale so the largest zone fits with a little margin.
+            let s = min((g.size.width - 40) / Prefs.zoneWidthRange.upperBound,
+                        (g.size.height - 6) / Prefs.zoneHeightRange.upperBound)
             ZStack(alignment: .top) {
                 LinearGradient(colors: [Color(red: 0.2, green: 0.25, blue: 0.45), Color(red: 0.45, green: 0.3, blue: 0.55)],
                                startPoint: .topLeading, endPoint: .bottomTrailing)

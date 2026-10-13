@@ -3,7 +3,8 @@ import Combine
 import SwiftUI
 
 enum NotchPhase: Equatable {
-    case collapsed, peek, open, activity
+    /// `mini`: a long transfer shrunk to a sliver under the notch with just its progress.
+    case collapsed, peek, open, activity, mini
 }
 
 @MainActor
@@ -17,11 +18,14 @@ final class NotchUIModel: ObservableObject {
     @Published var hoverOpen = false
     /// Set for a moment after a drop so the box animates up into the notch.
     @Published var justDropped = false
+    /// Set a moment into a transfer that is still running, so big files don't hold the notch open.
+    @Published var transferCompact = false
     var onClickDropBox: (() -> Void)?
 
     func phase(for activity: Activity) -> NotchPhase {
-        if dragActive && (nearNotch || dropHover) { return .open }
+        if dragActive && nearNotch { return .open }
         if hoverOpen && activity == .idle { return .open }
+        if transferCompact && activity.isTransferring { return .mini }
         if activity != .idle { return .activity }
         if dragActive { return .peek }
         return .collapsed
@@ -42,6 +46,9 @@ final class NotchController {
     private var dropView: DropView!
     private let drag = DragMonitor()
     private var bag = Set<AnyCancellable>()
+    private var compactTimer: DispatchWorkItem?
+    /// How long a transfer shows full details before it shrinks to the progress sliver.
+    private static let fullDetailsDuration: TimeInterval = 2.5
 
     init(app: AppModel) {
         self.app = app
@@ -64,14 +71,18 @@ final class NotchController {
         drag.start()
 
         // ND_DEMO=peek|open|hover forces a notch state, for screenshots while designing.
-        if let demo = ProcessInfo.processInfo.environment["ND_DEMO"] {
+        if ProcessInfo.processInfo.environment["ND_DEMO"] == "transfer" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { app.demoTransfer() }
+        } else if let demo = ProcessInfo.processInfo.environment["ND_DEMO"] {
             ui.dragActive = true
             ui.nearNotch = demo != "peek"
             ui.dropHover = demo == "hover"
         }
 
-        app.$activity.sink { [weak self] _ in
-            DispatchQueue.main.async { self?.updateMouseHandling() }
+        app.$activity.sink { [weak self] a in
+            guard let self else { return }
+            self.updateCompact(transferring: a.isTransferring)
+            DispatchQueue.main.async { self.updateMouseHandling() }
         }.store(in: &bag)
 
         prefs.$notchEnabled.sink { [weak self] on in
@@ -88,12 +99,38 @@ final class NotchController {
         }.store(in: &bag)
     }
 
+    // MARK: Transfer sliver
+
+    /// Shows a transfer in full first, then shrinks it if it is still running; completion expands it again.
+    private func updateCompact(transferring: Bool) {
+        if !transferring {
+            compactTimer?.cancel()
+            compactTimer = nil
+            if ui.transferCompact { ui.transferCompact = false }
+            return
+        }
+        guard compactTimer == nil, !ui.transferCompact else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.app.activity.isTransferring else { return }
+            self.ui.transferCompact = true
+        }
+        compactTimer = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.fullDetailsDuration, execute: work)
+    }
+
     // MARK: Activation zone
 
     /// The area around the notch where a drag makes the drop box expand.
     private var zone: NSRect {
         let f = panel.frame
         let w = prefs.zoneWidth, h = prefs.zoneHeight
+        return NSRect(x: f.midX - w / 2, y: f.maxY - h, width: w, height: h)
+    }
+
+    /// The expanded drop box on screen, matching `NotchRootView`'s open size.
+    private var openBox: NSRect {
+        let f = panel.frame
+        let w = NotchRootView.openSize.width + 16, h = ui.notchSize.height + NotchRootView.openSize.height
         return NSRect(x: f.midX - w / 2, y: f.maxY - h, width: w, height: h)
     }
 
@@ -173,11 +210,12 @@ final class NotchController {
         dv.autoresizingMask = [.width, .height]
         dv.addSubview(host)
         dv.onHover = { [weak self] hovering in
-            self?.ui.dropHover = hovering
+            if !hovering { self?.ui.dropHover = false }
         }
+        dv.onMove = { [weak self] p in self?.updateNear(p) }
         dv.canAccept = { [weak self] in
             guard let self else { return false }
-            return self.app.peer != nil && !self.app.isBusy
+            return self.ui.nearNotch && self.app.peer != nil && !self.app.isBusy
         }
         dv.onDrop = { [weak self] urls, texts in
             guard let self else { return }
@@ -219,12 +257,15 @@ final class NotchController {
                        display: true)
     }
 
+    /// Only the activation zone opens the box; once open it stays open while the pointer is over the box itself.
     private func updateNear(_ p: NSPoint) {
-        let near = zone.contains(p)
+        let near = zone.contains(p) || (ui.nearNotch && openBox.contains(p))
         if near != ui.nearNotch {
             ui.nearNotch = near
             if near { prefs.haptic() }
         }
+        let over = near && openBox.contains(p)
+        if over != ui.dropHover { ui.dropHover = over }
     }
 
     private func updateMouseHandling() {
@@ -236,7 +277,7 @@ final class NotchController {
             case .received, .failed, .incoming: interactive = true
             default: interactive = false
             }
-        case .collapsed: interactive = false
+        case .collapsed, .mini: interactive = false
         }
         panel.ignoresMouseEvents = !(interactive || ui.dragActive)
     }
@@ -324,6 +365,8 @@ final class DropView: NSView {
     var onHover: ((Bool) -> Void)?
     var onDrop: (([URL], [String]) -> Void)?
     var canAccept: (() -> Bool)?
+    /// Pointer position in screen coordinates while a drag is over the panel.
+    var onMove: ((NSPoint) -> Void)?
 
     private let promiseQueue: OperationQueue = {
         let q = OperationQueue()
@@ -340,11 +383,18 @@ final class DropView: NSView {
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         onHover?(true)
+        report(sender)
         return canAccept?() == true ? .copy : []
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        canAccept?() == true ? .copy : []
+        report(sender)
+        return canAccept?() == true ? .copy : []
+    }
+
+    private func report(_ sender: NSDraggingInfo) {
+        guard let window else { return }
+        onMove?(window.convertPoint(toScreen: sender.draggingLocation))
     }
 
     override func draggingExited(_ sender: NSDraggingInfo?) {

@@ -76,9 +76,9 @@ final class Prefs: ObservableObject {
         static let askedAccessibility = "askedAccessibility"
     }
 
-    static let defaultZone = CGSize(width: 560, height: 210)
-    static let zoneWidthRange: ClosedRange<Double> = 240...1000
-    static let zoneHeightRange: ClosedRange<Double> = 40...400
+    static let defaultZone = CGSize(width: 480, height: 160)
+    static let zoneWidthRange: ClosedRange<Double> = 240...560
+    static let zoneHeightRange: ClosedRange<Double> = 40...200
 
     private let d = UserDefaults.standard
 
@@ -107,8 +107,8 @@ final class Prefs: ObservableObject {
             Key.confirmReceive: false, Key.copyText: true, Key.openLinks: false,
         ])
         notchEnabled = d.bool(forKey: Key.notchEnabled)
-        zoneWidth = d.double(forKey: Key.zoneWidth)
-        zoneHeight = d.double(forKey: Key.zoneHeight)
+        zoneWidth = d.double(forKey: Key.zoneWidth).clamped(to: Self.zoneWidthRange)
+        zoneHeight = d.double(forKey: Key.zoneHeight).clamped(to: Self.zoneHeightRange)
         openOnHover = d.bool(forKey: Key.openOnHover)
         showMenuBarIcon = d.bool(forKey: Key.showMenuBarIcon)
         sounds = d.bool(forKey: Key.sounds)
@@ -136,4 +136,8 @@ final class Prefs: ObservableObject {
         guard haptics else { return }
         NSHapticFeedbackManager.defaultPerformer.perform(pattern, performanceTime: .now)
     }
+}
+
+extension Comparable {
+    func clamped(to r: ClosedRange<Self>) -> Self { min(max(self, r.lowerBound), r.upperBound) }
 }

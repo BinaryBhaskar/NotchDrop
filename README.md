@@ -24,7 +24,7 @@
   - Otherwise it sends the clipboard.
 - **Settings window**, in the style of System Settings. It opens when you launch the app, or from the menu bar with ⌘,. Panes:
   - *General:* launch at login, hide the menu-bar icon, sounds, trackpad haptics.
-  - *Notch:* turn the notch drop zone on or off, open it on hover, and set the activation-zone width and height with sliders. A live dashed outline on screen shows the zone while you adjust it.
+  - *Notch:* turn the notch drop zone on or off, open it on hover, and set the activation-zone width (up to 560 pt) and height (up to 200 pt) with sliders. Only drags inside that zone open the notch. A live dashed outline on screen shows the zone while you adjust it.
   - *Shortcuts:* the send hotkey and Accessibility status.
   - *Receiving:*
     - Choose the save folder. The default is `~/Downloads/From <phone>`.
@@ -32,6 +32,7 @@
     - Auto-copy received text.
     - Auto-open received links.
   - *Devices:* rename this Mac, nickname the phone, pair or unpair.
+- **Large transfers** show full details for a moment, then shrink to a slim strip around the notch: a direction arrow, the percentage and a thin progress bar. The notch opens again when the transfer finishes.
 - **Received files** appear as thumbnails in the notch. Click one to reveal it in Finder.
 - **Received text** is copied to the clipboard (optional), with an **Open Link** button.
 - **Hidden menu-bar icon:** open NotchDrop again from Launchpad or Spotlight to get back to Settings.
@@ -41,6 +42,7 @@
 - NotchDrop shows up in the share sheet for photos, videos, files, links and text.
 - A Quick Settings tile sends the clipboard.
 - An optional background receiver means the Mac can send at any time. Files go to `Downloads/From <Mac>`, and links and text arrive as notifications with **Copy** / **Open** actions.
+- A custom design system in the style of Linkerly: stroke icons in tinted tiles, outlined cards, and spring-scaled, haptic press feedback on every control. Dialogs and the share sheet follow the predictive back gesture.
 - A **Settings** screen, opened from the gear icon:
   - Names.
   - Background receiving.

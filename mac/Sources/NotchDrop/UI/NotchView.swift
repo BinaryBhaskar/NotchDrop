@@ -44,13 +44,18 @@ struct NotchRootView: View {
 
     private var phase: NotchPhase { ui.phase(for: app.activity) }
     private let flare: CGFloat = 8
+    /// Expanded drop box size below the notch; `NotchController` uses it for hit testing.
+    static let openSize = CGSize(width: 460, height: 196)
+    /// Extra width on each side of the notch for the transfer sliver's icon and percentage.
+    static let miniEar: CGFloat = 46
 
     private var bodySize: CGSize {
         let n = ui.notchSize
         switch phase {
         case .collapsed: return n
         case .peek: return CGSize(width: max(n.width + 90, 250), height: n.height + 30)
-        case .open: return CGSize(width: 460, height: n.height + 196)
+        case .open: return CGSize(width: Self.openSize.width, height: n.height + Self.openSize.height)
+        case .mini: return CGSize(width: n.width + Self.miniEar * 2, height: n.height + 9)
         case .activity:
             switch app.activity {
             case .received(let files, _) where !files.isEmpty: return CGSize(width: 420, height: n.height + 150)
@@ -66,6 +71,7 @@ struct NotchRootView: View {
         case .peek: return 16
         case .open: return 30
         case .activity: return 24
+        case .mini: return 12
         }
     }
 
@@ -77,7 +83,7 @@ struct NotchRootView: View {
                 .shadow(color: .black.opacity(phase == .collapsed ? 0 : 0.45), radius: 18, y: 8)
 
             content
-                .padding(.top, ui.notchSize.height)
+                .padding(.top, phase == .mini ? 0 : ui.notchSize.height)
                 .padding(.horizontal, flare)
                 .frame(width: size.width + flare * 2, height: size.height, alignment: .top)
                 .clipped()
@@ -107,6 +113,9 @@ struct NotchRootView: View {
         case .activity:
             ActivityView(app: app)
                 .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
+        case .mini:
+            MiniTransferView(activity: app.activity, notch: ui.notchSize, ear: Self.miniEar)
+                .transition(.opacity.animation(.easeOut(duration: 0.2).delay(0.12)))
         }
     }
 }
@@ -426,6 +435,47 @@ struct ActivityView: View {
     }
 }
 
+/// A long transfer, shrunk around the notch: direction on the left, percentage on the right, a hairline bar below.
+struct MiniTransferView: View {
+    var activity: Activity
+    var notch: CGSize
+    var ear: CGFloat
+
+    private var fraction: Double {
+        switch activity {
+        case .sending(_, let f, _), .receiving(_, let f): return f
+        default: return 0
+        }
+    }
+
+    private var incoming: Bool {
+        if case .receiving = activity { return true }
+        return false
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                Image(systemName: incoming ? "arrow.down" : "arrow.up")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Palette.accent)
+                    .symbolEffect(.pulse)
+                    .frame(width: ear)
+                Spacer(minLength: notch.width)
+                Text("\(Int(fraction * 100))%")
+                    .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.85))
+                    .contentTransition(.numericText())
+                    .frame(width: ear)
+            }
+            .frame(height: notch.height)
+            ProgressBar(fraction: fraction, height: 3)
+                .padding(.horizontal, 14)
+                .padding(.top, 2)
+        }
+    }
+}
+
 /// Received files as thumbnails; clicking one reveals it in Finder.
 struct ThumbnailStrip: View {
     var files: [URL]
@@ -499,6 +549,7 @@ final class ThumbnailLoader: ObservableObject {
 
 struct ProgressBar: View {
     var fraction: Double
+    var height: CGFloat = 5
 
     var body: some View {
         GeometryReader { g in
@@ -506,11 +557,11 @@ struct ProgressBar: View {
                 Capsule().fill(Color.white.opacity(0.12))
                 Capsule()
                     .fill(LinearGradient(colors: [Palette.accent, Palette.accent2], startPoint: .leading, endPoint: .trailing))
-                    .frame(width: max(6, g.size.width * fraction))
+                    .frame(width: max(height + 1, g.size.width * fraction))
                     .animation(.linear(duration: 0.1), value: fraction)
             }
         }
-        .frame(height: 5)
+        .frame(height: height)
     }
 }
 

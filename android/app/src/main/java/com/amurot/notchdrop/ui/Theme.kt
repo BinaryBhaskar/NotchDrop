@@ -57,6 +57,7 @@ object Palette {
     val surface get() = if (dark) Color(0xFF17191F) else Color.White
     val surface2 get() = if (dark) Color(0xFF1F222A) else Color(0xFFECEEF2)
     val line get() = if (dark) Color(0x1FFFFFFF) else Color(0x14000000)
+    val lineStrong get() = if (dark) Color(0x33FFFFFF) else Color(0x24000000)
     val text get() = if (dark) Color.White else Color(0xFF14161B)
     val dim get() = if (dark) Color(0x8CFFFFFF) else Color(0x99000000)
     val accent = Color(0xFF5C94FF)

@@ -1,0 +1,15 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- Shield Outline -->
+    <path
+        android:pathData="M12,22.12 C12,22.12 20.1,18.07 20.1,12 V4.57 L12,1.88 L3.9,4.57 V12 C3.9,18.07 12,22.12 12,22.12 Z"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+</vector>

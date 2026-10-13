@@ -10,6 +10,13 @@ enum Activity: Equatable {
     case received(files: [URL], texts: [String])
     case incoming(summary: String)
     case failed(String)
+
+    var isTransferring: Bool {
+        switch self {
+        case .sending, .receiving: return true
+        default: return false
+        }
+    }
 }
 
 enum Route: String {
@@ -315,6 +322,17 @@ final class AppModel: ObservableObject {
     }
 
     func dismissActivity() { setActivity(.idle) }
+
+    /// ND_DEMO=transfer: a fake 8-second receive, for checking the full → sliver → done sequence.
+    func demoTransfer() {
+        Task {
+            for i in 0...100 {
+                setActivity(.receiving(name: "Holiday video.mov", fraction: Double(i) / 100))
+                try? await Task.sleep(nanoseconds: 80_000_000)
+            }
+            setActivity(.received(files: [], texts: ["Holiday video.mov"]), resetAfter: 6)
+        }
+    }
 
     private func setActivity(_ a: Activity, resetAfter: TimeInterval? = nil) {
         activity = a
