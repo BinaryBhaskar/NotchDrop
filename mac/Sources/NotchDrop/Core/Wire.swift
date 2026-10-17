@@ -10,6 +10,13 @@ enum Wire {
     static let serviceType = "_notchdrop._tcp"
     static let maxFrame = 4 * 1024 * 1024
     static let chunkSize = 256 * 1024
+    /// A transfer that makes no progress for this long has lost its connection.
+    static let stallTimeout: TimeInterval = 20
+
+    /// Sent by either side to stop a running transfer.
+    static func cancelFrame(_ note: String) -> [String: Any] {
+        ["t": "error", "message": note, "cancelled": true]
+    }
 }
 
 enum NDError: LocalizedError {
@@ -18,6 +25,8 @@ enum NDError: LocalizedError {
     case badFrame(String)
     case rejected(String)
     case unreachable
+    case cancelled(String)
+    case connectionLost
 
     var errorDescription: String? {
         switch self {
@@ -26,6 +35,8 @@ enum NDError: LocalizedError {
         case .badFrame(let s): return "Protocol error: \(s)"
         case .rejected(let s): return s
         case .unreachable: return "Phone not reachable"
+        case .cancelled(let s): return s
+        case .connectionLost: return "Connection lost. Check that both devices are still on the same network."
         }
     }
 }
@@ -80,7 +91,8 @@ final class FrameConn: @unchecked Sendable {
                 conn.stateUpdateHandler = { state in
                     switch state {
                     case .ready: finish(nil)
-                    case .failed(let e): finish(e)
+                    // Also after `.ready`: cancelling wakes any pending read or write when the network goes away.
+                    case .failed(let e): finish(e); conn.cancel()
                     case .waiting(let e): finish(e); conn.cancel()
                     case .cancelled: finish(NDError.closed)
                     default: break
@@ -227,7 +239,9 @@ final class SecureChannel: @unchecked Sendable {
                 throw NDError.badFrame("bad json")
             }
             if obj["t"] as? String == "error" {
-                throw NDError.rejected(obj["message"] as? String ?? "Remote error")
+                let message = obj["message"] as? String ?? "Remote error"
+                if obj["cancelled"] as? Bool == true { throw NDError.cancelled(message) }
+                throw NDError.rejected(message)
             }
             return .json(obj)
         case 2:

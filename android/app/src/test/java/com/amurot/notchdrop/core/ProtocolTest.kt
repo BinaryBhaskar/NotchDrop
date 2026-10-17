@@ -6,6 +6,8 @@ import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
+import java.io.InputStream
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -44,14 +46,20 @@ class ProtocolTest {
         val sink = MemSink()
         val finished = CountDownLatch(1)
         var batch: ReceivedBatch? = null
+        var error: Exception? = null
+        var control: TransferControl? = null
+        /** Called with bytes received so far. */
+        var onProgress: (Long) -> Unit = {}
+        override val cancelNote = "Stopped on Test."
+        override fun incomingStarted(control: TransferControl) { this.control = control }
         override val myId = id
         override fun keyFor(mode: String, from: String) = key
         override fun myHello(): JSONObject = JSONObject().put("t", "hello").put("id", id).put("name", "Test").put("platform", "test")
         override fun didReceiveHello(hello: JSONObject, mode: String, remoteHost: String?) {}
         override fun sink() = sink
-        override fun incomingProgress(done: Long, total: Long, name: String) {}
+        override fun incomingProgress(done: Long, total: Long, name: String) = onProgress(done)
         override fun incomingFinished(batch: ReceivedBatch) { this.batch = batch; finished.countDown() }
-        override fun incomingFailed(error: Exception) { finished.countDown() }
+        override fun incomingFailed(error: Exception) { this.error = error; finished.countDown() }
     }
 
     @Test
@@ -84,6 +92,73 @@ class ProtocolTest {
             assertArrayEquals(data, node.sink.files["a.bin"])
             assertTrue(node.sink.files.containsKey("evil-name.txt"))
             assertEquals(listOf("https://example.com"), b.texts)
+        } finally {
+            server.stop()
+        }
+    }
+
+    /** `size` zero bytes without holding them in memory. */
+    private fun zeros(size: Long) = object : InputStream() {
+        var left = size
+        override fun read(): Int = if (left-- > 0) 0 else -1
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (left <= 0) return -1
+            val n = minOf(len.toLong(), left).toInt()
+            b.fill(0, off, off + n)
+            left -= n
+            return n
+        }
+    }
+
+    private fun bigFile() = listOf(OutgoingItem.File("big.bin", 512L * 1024 * 1024, "application/octet-stream") { zeros(512L * 1024 * 1024) })
+
+    private suspend fun connect(port: Int, key: ByteArray) = PeerLink.connect(
+        listOf(InetSocketAddress("127.0.0.1", port)), "session", key, "client",
+        JSONObject().put("t", "hello").put("id", "client").put("name", "C").put("platform", "test"),
+    )
+
+    @Test
+    fun receiverCancelStopsSender() = runBlocking {
+        val key = Wire.randomBytes(32)
+        val node = Node("server", key)
+        node.onProgress = { done -> if (done > 4 * 1024 * 1024) node.control?.cancel() }
+        val server = ProtocolServer(0, node)
+        val port = server.start()
+        try {
+            val c = connect(port, key)
+            try {
+                Transfer.send(bigFile(), c.channel) { _, _, _ -> }
+                fail("send should have been cancelled")
+            } catch (e: CancelledException) {
+                assertEquals("Stopped on Test.", e.message)
+            }
+            assertTrue(node.finished.await(10, TimeUnit.SECONDS))
+            assertTrue(node.error is CancelledException)
+            assertEquals(TransferControl.YOU_CANCELLED, node.error?.message)
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun senderCancelStopsReceiver() = runBlocking {
+        val key = Wire.randomBytes(32)
+        val node = Node("server", key)
+        val server = ProtocolServer(0, node)
+        val port = server.start()
+        try {
+            val c = connect(port, key)
+            val control = TransferControl("Stopped on Sender.")
+            control.attach(c.channel, receiving = false)
+            try {
+                Transfer.send(bigFile(), c.channel, control) { done, _, _ -> if (done > 4 * 1024 * 1024) control.cancel() }
+                fail("send should have been cancelled")
+            } catch (e: CancelledException) {
+                assertEquals(TransferControl.YOU_CANCELLED, e.message)
+            }
+            assertTrue(node.finished.await(10, TimeUnit.SECONDS))
+            assertTrue("got ${node.error}", node.error is CancelledException)
+            assertEquals("Stopped on Sender.", node.error?.message)
         } finally {
             server.stop()
         }

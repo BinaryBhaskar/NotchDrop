@@ -51,6 +51,10 @@ final class Store: @unchecked Sendable {
     }
 
     private var peerFile: URL { dir.appendingPathComponent("peer.json") }
+    /// Where an interrupted incoming batch is remembered so it can be resumed after a relaunch.
+    var resumeFile: URL { dir.appendingPathComponent("resume.json") }
+    var recentsFile: URL { dir.appendingPathComponent("recent.json") }
+    var historyFile: URL { dir.appendingPathComponent("history.json") }
 
     var peer: PairedPeer? {
         get { lock.lock(); defer { lock.unlock() }; return _peer }

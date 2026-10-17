@@ -29,6 +29,9 @@ data class HistoryEntry(
     val time: Long,
     val uri: String? = null,
     val text: String? = null,
+    val mime: String? = null,
+    /** Stable key for lists and removal. */
+    val id: String = UUID.randomUUID().toString(),
 )
 
 /** App-private prefs. allowBackup=false keeps the pairing key on this device. */
@@ -86,6 +89,11 @@ class PeerStore(private val ctx: Context) {
         get() = prefs.getString("skippedVersion", null)
         set(v) = prefs.edit().putString("skippedVersion", v).apply()
 
+    /** The folder picked for received files (a SAF tree URI), or null for Downloads/From <Mac>. */
+    var saveTree: String?
+        get() = prefs.getString("saveTree", null)
+        set(v) = prefs.edit().putString("saveTree", v).apply()
+
     var batteryPromptDismissed: Boolean
         get() = prefs.getBoolean("batteryPromptDismissed", false)
         set(v) = prefs.edit().putBoolean("batteryPromptDismissed", v).apply()
@@ -130,6 +138,8 @@ class PeerStore(private val ctx: Context) {
                     time = o.getLong("time"),
                     uri = o.optString("uri").ifEmpty { null },
                     text = o.optString("text").ifEmpty { null },
+                    mime = o.optString("mime").ifEmpty { null },
+                    id = o.optString("id").ifEmpty { "${o.getLong("time")}-$it" },
                 )
             }
         }.getOrDefault(emptyList())
@@ -139,6 +149,7 @@ class PeerStore(private val ctx: Context) {
                 a.put(
                     JSONObject().put("in", it.incoming).put("title", it.title).put("detail", it.detail)
                         .put("time", it.time).put("uri", it.uri ?: "").put("text", it.text ?: "")
+                        .put("mime", it.mime ?: "").put("id", it.id)
                 )
             }
             prefs.edit().putString("history", a.toString()).apply()

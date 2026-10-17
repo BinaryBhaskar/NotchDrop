@@ -16,6 +16,8 @@ import android.os.Build
 import android.util.Log
 import android.util.Patterns
 import androidx.annotation.RequiresApi
+import com.amurot.notchdrop.BuildConfig
+import com.amurot.notchdrop.core.CancelledException
 import com.amurot.notchdrop.core.NDException
 import com.amurot.notchdrop.core.OutgoingItem
 import com.amurot.notchdrop.core.PeerLink
@@ -23,13 +25,17 @@ import com.amurot.notchdrop.core.ProgressThrottle
 import com.amurot.notchdrop.core.ProtocolServer
 import com.amurot.notchdrop.core.ReceiveSink
 import com.amurot.notchdrop.core.ReceivedBatch
+import com.amurot.notchdrop.core.ResumeStore
 import com.amurot.notchdrop.core.SessionDelegate
 import com.amurot.notchdrop.core.Transfer
+import com.amurot.notchdrop.core.TransferControl
 import com.amurot.notchdrop.core.Wire
 import com.amurot.notchdrop.ui.ThemeMode
+import java.io.File
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.Base64
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineScope
@@ -40,6 +46,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -57,6 +65,8 @@ sealed interface Activity {
     data class Receiving(val done: Long, val total: Long, val name: String) : Activity
     data class Received(val batch: ReceivedBatch) : Activity
     data class Failed(val message: String) : Activity
+    /** Stopped by either side; the message says which. */
+    data class Cancelled(val message: String) : Activity
 }
 
 data class NodeState(
@@ -67,9 +77,16 @@ data class NodeState(
     val listening: Boolean = false,
     val deviceName: String = "",
     val history: List<HistoryEntry> = emptyList(),
+    /** The last send, if it failed partway; offered as Resume, never retried on its own. */
+    val resumable: PendingSend? = null,
+    /** The picked save folder's label; null means Download/From <Mac>. */
+    val saveFolder: String? = null,
 ) {
     val busy: Boolean get() = activity is Activity.Connecting || activity is Activity.Sending || activity is Activity.Receiving
 }
+
+/** A failed send kept so it can be resumed: the same `id` lets the Mac answer with what it already has. */
+data class PendingSend(val items: List<OutgoingItem>, val summary: String, val id: String, val sentAny: Boolean)
 
 /** Process-wide engine: protocol server, NSD, pairing and sending. NodeService keeps the process alive for receiving. */
 @SuppressLint("StaticFieldLeak") // Holds only the application context.
@@ -91,10 +108,15 @@ object Node : SessionDelegate {
     /** True while one of our activities is on screen; Android only lets us open links then. */
     @Volatile var uiVisible = false
 
+    /** The dev build listens one port up, so it can run next to the release app. The Mac uses the port from our hello. */
+    private val listenPort = if (BuildConfig.DEBUG) Wire.PHONE_PORT + 1 else Wire.PHONE_PORT
+
     private var server: ProtocolServer? = null
     private val sendLock = Mutex()
     private var resetJob: Job? = null
     private var refreshJob: Job? = null
+    /** The running transfer, so Cancel buttons can stop it. Kept after cancelling so its late progress is ignored. */
+    @Volatile private var transfer: TransferControl? = null
 
     /** Mac id -> addresses seen via NSD. */
     private val nsdAddrs = ConcurrentHashMap<String, List<String>>()
@@ -111,7 +133,15 @@ object Node : SessionDelegate {
         cm = ctx.getSystemService(ConnectivityManager::class.java)
         nsd = ctx.getSystemService(NsdManager::class.java)
         _state.value = NodeState(peer = store.peer, deviceName = store.deviceName, history = store.history)
+        _state.update { it.copy(saveFolder = saveTree()?.let(FolderSink::label)) }
         _themeMode.value = store.theme
+
+        // Keep the home-screen widget in step with what it shows.
+        scope.launch {
+            _state.map { Triple(it.peer?.displayName, it.reachable to it.route, it.history.firstOrNull { e -> e.incoming && e.uri != null }?.id) }
+                .distinctUntilChanged()
+                .collect { runCatching { Widget.refresh(ctx) } }
+        }
 
         // Wi-Fi/hotspot changes: tell the Mac our new addresses.
         val req = NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build()
@@ -125,7 +155,9 @@ object Node : SessionDelegate {
 
     fun startListening() {
         if (server == null) {
-            val s = ProtocolServer(Wire.PHONE_PORT, this)
+            val resume = ResumeStore(File(ctx.filesDir, "resume.json"), SavedParts(ctx) { saveTree() })
+            resume.cleanUp()
+            val s = ProtocolServer(listenPort, this, resume)
             try {
                 s.start()
                 server = s
@@ -157,22 +189,52 @@ object Node : SessionDelegate {
 
     override fun myHello(): JSONObject = JSONObject()
         .put("t", "hello").put("id", store.deviceId).put("name", store.deviceName).put("platform", "android")
-        .put("addrs", JSONArray(Net.localAddrs())).put("port", Wire.PHONE_PORT)
+        .put("addrs", JSONArray(Net.localAddrs())).put("port", listenPort)
 
     override fun didReceiveHello(hello: JSONObject, mode: String, remoteHost: String?) {
         learn(hello, remoteHost)
     }
 
-    override fun sink(): ReceiveSink = MediaStoreSink(ctx, store.peer?.displayName ?: "Mac")
+    override fun sink(): ReceiveSink = saveTree()?.let { FolderSink(ctx, it) } ?: MediaStoreSink(ctx, store.peer?.displayName ?: "Mac")
+
+    /** The picked save folder, if we still have permission to write there. */
+    fun saveTree(): Uri? {
+        val t = store.saveTree?.let(Uri::parse) ?: return null
+        return t.takeIf { ctx.contentResolver.persistedUriPermissions.any { p -> p.uri == t && p.isWritePermission } }
+    }
+
+    /** Where received files go, for display: "Download/From MacBook" or the picked folder. */
+    val saveLabel: String
+        get() = saveTree()?.let(FolderSink::label) ?: "Download/From ${store.peer?.displayName ?: "<Mac name>"}"
+
+    /** Pass null to go back to Downloads/From <Mac>. Releases the old folder's permission. */
+    fun setSaveTree(uri: Uri?) {
+        val old = store.saveTree?.let(Uri::parse)
+        if (old != null && old != uri) {
+            runCatching {
+                ctx.contentResolver.releasePersistableUriPermission(old, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            }
+        }
+        store.saveTree = uri?.toString()
+        _state.update { it.copy(saveFolder = saveTree()?.let(FolderSink::label)) }
+    }
+
+    override val cancelNote: String get() = "Stopped on ${store.deviceName}."
+
+    override fun incomingStarted(control: TransferControl) {
+        transfer = control
+    }
 
     override fun incomingProgress(done: Long, total: Long, name: String) {
+        if (transfer?.cancelled == true) return
         setActivity(Activity.Receiving(done, total, name))
     }
 
     override fun incomingFinished(batch: ReceivedBatch) {
+        transfer = null
         val mac = store.peer?.displayName ?: "Mac"
         setActivity(Activity.Received(batch))
-        val entries = batch.files.map { HistoryEntry(true, it.name, "From $mac", System.currentTimeMillis(), uri = it.uri) } +
+        val entries = batch.files.map { HistoryEntry(true, it.name, "From $mac", System.currentTimeMillis(), uri = it.uri, mime = it.mime) } +
             batch.texts.map { HistoryEntry(true, it.take(120), "Text from $mac", System.currentTimeMillis(), text = it) }
         addHistory(entries)
         Notifier.received(ctx, batch, mac)
@@ -193,7 +255,20 @@ object Node : SessionDelegate {
     }
 
     override fun incomingFailed(error: Exception) {
-        setActivity(Activity.Failed(error.message ?: "Receive failed"))
+        transfer = null
+        when {
+            error !is CancelledException -> setActivity(Activity.Failed(error.message ?: "Receive failed"))
+            // Our own cancel is already on screen.
+            error.message != TransferControl.YOU_CANCELLED -> setActivity(Activity.Cancelled(error.message ?: "Cancelled"))
+        }
+    }
+
+    /** Stops the transfer in progress, in either direction. */
+    fun cancelTransfer() {
+        val t = transfer ?: return
+        if (t.cancelled) return
+        t.cancel()
+        setActivity(Activity.Cancelled(TransferControl.YOU_CANCELLED))
     }
 
     // MARK: Pairing
@@ -285,27 +360,57 @@ object Node : SessionDelegate {
         runCatching { sendNow(items, summary) }
     }
 
-    suspend fun sendNow(items: List<OutgoingItem>, summary: String) = sendLock.withLock {
+    /** Sends the failed batch again; the Mac skips what it already received. */
+    fun resumeSend(): Job? {
+        val p = _state.value.resumable ?: return null
+        return scope.launch { runCatching { sendNow(p.items, p.summary, p.id) } }
+    }
+
+    /** `id` names the batch; pass the same one to resume it. */
+    suspend fun sendNow(items: List<OutgoingItem>, summary: String, id: String = UUID.randomUUID().toString()) = sendLock.withLock {
+        val prior = _state.value.resumable?.takeIf { it.id == id }
+        _state.update { it.copy(resumable = null) }
+        var sentAny = prior?.sentAny == true
         val peer = store.peer ?: run {
             setActivity(Activity.Failed("Not paired with a Mac"))
             throw NDException("Not paired with a Mac")
         }
+        val control = TransferControl(cancelNote)
+        transfer = control
         setActivity(Activity.Connecting)
         try {
             val c = connect(peer)
             try {
-                Transfer.send(items, c.channel, ProgressThrottle { done, total, name ->
-                    setActivity(Activity.Sending(done, total, name))
+                if (control.cancelled) throw CancelledException(TransferControl.YOU_CANCELLED)
+                control.attach(c.channel, receiving = false)
+                var first = true
+                Transfer.send(items, c.channel, control, id, ProgressThrottle { done, total, name ->
+                    // The first report is where a resume starts, not new bytes.
+                    if (!first && done > 0) sentAny = true
+                    first = false
+                    if (!control.cancelled) setActivity(Activity.Sending(done, total, name))
                 })
                 runCatching { c.channel.sendJson(JSONObject().put("t", "bye")) }
             } finally {
                 c.channel.close()
             }
             setActivity(Activity.Sent(summary))
-            addHistory(listOf(HistoryEntry(false, summary, "To ${peer.displayName}", System.currentTimeMillis())))
+            // A lone text is kept so it can be copied or sent again.
+            val text = (items.singleOrNull() as? OutgoingItem.Text)?.text
+            val file = (items.singleOrNull() as? OutgoingItem.File)
+            addHistory(listOf(HistoryEntry(false, summary, "To ${peer.displayName}", System.currentTimeMillis(), text = text, mime = file?.mime)))
         } catch (e: Exception) {
-            setActivity(Activity.Failed(e.message ?: "Send failed"))
+            when {
+                control.cancelled -> {} // already showing "cancelled"
+                e is CancelledException -> setActivity(Activity.Cancelled(e.message ?: "Cancelled"))
+                else -> {
+                    _state.update { it.copy(resumable = PendingSend(items, summary, id, sentAny)) }
+                    setActivity(Activity.Failed(e.message ?: "Send failed"))
+                }
+            }
             throw e
+        } finally {
+            if (transfer === control) transfer = null
         }
     }
 
@@ -345,7 +450,9 @@ object Node : SessionDelegate {
         val hold = when (a) {
             is Activity.Sent -> 4000L
             is Activity.Received -> 8000L
-            is Activity.Failed -> 6000L
+            // A resumable failure waits for Resume or OK.
+            is Activity.Failed -> if (_state.value.resumable != null) return else 6000L
+            is Activity.Cancelled -> 3500L
             else -> return
         }
         resetJob = scope.launch {
@@ -355,19 +462,44 @@ object Node : SessionDelegate {
     }
 
     fun dismissActivity() {
-        if (!_state.value.busy) _state.update { it.copy(activity = Activity.Idle) }
+        if (!_state.value.busy) _state.update { it.copy(activity = Activity.Idle, resumable = null) }
     }
 
     private fun addHistory(entries: List<HistoryEntry>) {
         if (entries.isEmpty()) return
-        val list = (entries.reversed() + store.history).take(40)
+        setHistory((entries.reversed() + store.history).take(40))
+    }
+
+    fun clearHistory() = setHistory(emptyList())
+
+    fun removeHistory(id: String) = setHistory(_state.value.history.filterNot { it.id == id })
+
+    /** Puts back entries removed a moment ago (Undo), in their original order. */
+    fun restoreHistory(entries: List<HistoryEntry>) =
+        setHistory((_state.value.history + entries).distinctBy { it.id }.sortedByDescending { it.time })
+
+    private fun setHistory(list: List<HistoryEntry>) {
         store.history = list
         _state.update { it.copy(history = list) }
     }
 
-    fun clearHistory() {
-        store.history = emptyList()
-        _state.update { it.copy(history = emptyList()) }
+    /** Drops received files that were deleted or moved since. */
+    fun pruneHistory() = scope.launch {
+        val r = ctx.contentResolver
+        val gone = _state.value.history.filter { e ->
+            e.incoming && e.uri != null && runCatching { r.query(Uri.parse(e.uri), null, null, null, null)?.use { it.count == 0 } ?: true }.getOrDefault(true)
+        }
+        if (gone.isNotEmpty()) setHistory(_state.value.history - gone.toSet())
+    }
+
+    /** Sends a recent item back to the Mac: a received file, or a text either way. */
+    fun resend(e: HistoryEntry): Job? {
+        val items = when {
+            e.uri != null -> runCatching { Outgoing.fromUris(ctx, listOf(Uri.parse(e.uri))) }.getOrNull() ?: return null
+            e.text != null -> listOf(OutgoingItem.Text(e.text))
+            else -> return null
+        }
+        return send(items, Outgoing.summary(items))
     }
 
     private fun jsonStrings(a: JSONArray?): List<String> = if (a == null) emptyList() else List(a.length()) { a.optString(it) }.filter { it.isNotBlank() }
@@ -379,7 +511,7 @@ object Node : SessionDelegate {
             val info = NsdServiceInfo().apply {
                 serviceName = "NotchDrop ${store.deviceName}"
                 serviceType = Wire.SERVICE_TYPE
-                port = Wire.PHONE_PORT
+                port = listenPort
                 setAttribute("id", store.deviceId)
                 setAttribute("role", "phone")
             }

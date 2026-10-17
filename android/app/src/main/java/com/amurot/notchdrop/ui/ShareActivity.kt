@@ -47,6 +47,7 @@ import androidx.core.content.IntentCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.amurot.notchdrop.core.OutgoingItem
+import com.amurot.notchdrop.core.TransferControl
 import com.amurot.notchdrop.service.Activity
 import com.amurot.notchdrop.service.Node
 import com.amurot.notchdrop.service.NodeState
@@ -56,12 +57,14 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 private sealed interface Phase {
     data object Preparing : Phase
     data object Working : Phase
     data class Done(val summary: String) : Phase
     data class Failed(val message: String) : Phase
+    data class Cancelled(val message: String) : Phase
     data object NotPaired : Phase
 }
 
@@ -132,20 +135,24 @@ class ShareActivity : ComponentActivity() {
         return listOf(OutgoingItem.Text(text))
     }
 
+    private val batchId = UUID.randomUUID().toString()
+
     private fun start() {
         if (items.isEmpty()) return
         phase = Phase.Working
         val summary = Outgoing.summary(items)
         lifecycleScope.launch {
             // Runs in Node's scope; this activity stays alive (backgrounded if dismissed) so shared URI grants hold.
-            val result = Node.scope.async { runCatching { Node.sendNow(items, summary) } }.await()
+            // The same id on every retry from this sheet, so the Mac can resume instead of starting over.
+            val result = Node.scope.async { runCatching { Node.sendNow(items, summary, batchId) } }.await()
             val a = Node.state.value.activity
             phase = when {
                 a is Activity.Failed -> Phase.Failed(a.message)
+                a is Activity.Cancelled -> Phase.Cancelled(a.message)
                 result.isFailure -> Phase.Failed(result.exceptionOrNull()?.message ?: "Send failed")
                 else -> Phase.Done(summary)
             }
-            if (phase is Phase.Done) {
+            if (phase is Phase.Done || phase == Phase.Cancelled(TransferControl.YOU_CANCELLED)) {
                 delay(1100)
                 finish()
             }
@@ -191,6 +198,7 @@ private fun Sheet(state: NodeState, phase: Phase, onDismiss: () -> Unit, onRetry
                 val (icon, tint) = when (phase) {
                     is Phase.Done -> NdIcons.Check to Palette.ok
                     is Phase.Failed, Phase.NotPaired -> NdIcons.Warning to Palette.bad
+                    is Phase.Cancelled -> NdIcons.Close to Palette.dim
                     else -> NdIcons.Laptop to Palette.accent
                 }
                 AnimatedContent(icon to tint, transitionSpec = {
@@ -212,18 +220,31 @@ private fun Sheet(state: NodeState, phase: Phase, onDismiss: () -> Unit, onRetry
                     Spacer(Modifier.height(16.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         NdButton("Close", onDismiss, style = NdButtonStyle.Text)
-                        NdButton("Retry", onRetry, icon = NdIcons.Refresh)
+                        NdButton(if (state.resumable?.sentAny == true) "Resume" else "Retry", onRetry, icon = NdIcons.Refresh)
                     }
                 }
                 is Phase.Done -> {
                     Title("Sent to $mac")
                     Sub(phase.summary)
                 }
+                is Phase.Cancelled -> {
+                    Title("Transfer cancelled")
+                    Sub(phase.message)
+                    Spacer(Modifier.height(16.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        NdButton("Close", onDismiss, style = NdButtonStyle.Text)
+                        NdButton("Retry", onRetry, icon = NdIcons.Refresh)
+                    }
+                }
                 else -> {
                     Title(if (a is Activity.Sending) "Sending to $mac" else "Connecting to $mac…")
                     Sub(if (a is Activity.Sending) "${a.name} · ${formatBytes(a.done)} of ${formatBytes(a.total)}" else "Same Wi-Fi or hotspot")
                     Spacer(Modifier.height(14.dp))
                     ProgressBar(if (a is Activity.Sending && a.total > 0) a.done.toFloat() / a.total else null)
+                    if (phase == Phase.Working) {
+                        Spacer(Modifier.height(8.dp))
+                        NdButton("Cancel", Node::cancelTransfer, style = NdButtonStyle.Text)
+                    }
                 }
             }
         }

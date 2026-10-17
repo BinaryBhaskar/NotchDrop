@@ -1,0 +1,61 @@
+import SwiftUI
+
+/// The Amurot mark, drawn from its 1024-unit SVG so it stays sharp at any size and takes the foreground color.
+struct AmurotLogo: Shape {
+    func path(in rect: CGRect) -> Path {
+        let s = min(rect.width, rect.height) / 1024
+        let ox = rect.midX - 512 * s, oy = rect.midY - 512 * s
+        func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: ox + x * s, y: oy + y * s) }
+        var p = Path()
+        p.move(to: pt(627.76, 532.33))
+        p.addCurve(to: pt(641.93, 508.74), control1: pt(625.4, 521.96), control2: pt(631.67, 511.55))
+        p.addCurve(to: pt(746.07, 405.72), control1: pt(691.31, 495.21), control2: pt(732.01, 455.02))
+        p.addCurve(to: pt(649.35, 220.23), control1: pt(768.19, 328.22), control2: pt(729.14, 246.37))
+        p.addCurve(to: pt(466.81, 304.46), control1: pt(574.63, 195.75), control2: pt(496.86, 234.52))
+        p.addCurve(to: pt(441.43, 315.18), control1: pt(462.61, 314.25), control2: pt(451.4, 318.92))
+        p.addCurve(to: pt(406.09, 304.11), control1: pt(429.87, 310.84), control2: pt(418.23, 307.18))
+        p.addCurve(to: pt(392.41, 277.34), control1: pt(393.95, 301.04), control2: pt(387.92, 288.54))
+        p.addCurve(to: pt(537.99, 144.27), control1: pt(417.94, 213.64), control2: pt(471.23, 164.08))
+        p.addCurve(to: pt(670.16, 144.22), control1: pt(581.37, 131.4), control2: pt(627.85, 131.42))
+        p.addCurve(to: pt(810.25, 458.72), control1: pt(803.39, 184.52), control2: pt(868.43, 332.84))
+        p.addCurve(to: pt(658.59, 585.41), control1: pt(781.24, 521.5), control2: pt(725.73, 568.55))
+        p.addCurve(to: pt(633.82, 568.14), control1: pt(646.8, 588.37), control2: pt(635.18, 580.22))
+        p.addCurve(to: pt(627.75, 532.32), control1: pt(632.46, 556.06), control2: pt(630.43, 544.13))
+        p.closeSubpath()
+        p.move(to: pt(431.11, 832.41))
+        p.addCurve(to: pt(422.88, 864.55), control1: pt(440.59, 842.96), control2: pt(436.25, 859.81))
+        p.addCurve(to: pt(121.61, 785.75), control1: pt(316.42, 902.32), control2: pt(197.52, 870.48))
+        p.addCurve(to: pt(51.15, 624.88), control1: pt(81.55, 741.03), control2: pt(56.74, 685.11))
+        p.addCurve(to: pt(187.76, 356.43), control1: pt(41.12, 516.84), control2: pt(94.9, 411.93))
+        p.addCurve(to: pt(476.26, 357), control1: pt(277.03, 303.07), control2: pt(388.09, 304.63))
+        p.addCurve(to: pt(477.79, 390.45), control1: pt(488.67, 364.37), control2: pt(489.47, 381.97))
+        p.addCurve(to: pt(355.94, 593.38), control1: pt(409.75, 439.86), control2: pt(368.45, 507.87))
+        p.addCurve(to: pt(431.1, 832.41), control1: pt(344.7, 679.92), control2: pt(371.96, 766.59))
+        p.closeSubpath()
+        p.move(to: pt(698.42, 834.97))
+        p.addCurve(to: pt(860.83, 662.13), control1: pt(783.64, 816.89), control2: pt(847.66, 747.45))
+        p.addCurve(to: pt(822.42, 509.25), control1: pt(869.19, 608.03), control2: pt(854.31, 553.29))
+        p.addCurve(to: pt(821.14, 487.79), control1: pt(817.86, 502.95), control2: pt(817.36, 494.58))
+        p.addCurve(to: pt(834.9, 459.33), control1: pt(826.27, 478.58), control2: pt(830.79, 469.19))
+        p.addCurve(to: pt(868.56, 453.84), control1: pt(840.64, 445.55), control2: pt(858.8, 442.54))
+        p.addCurve(to: pt(933.85, 650.7), control1: pt(915.24, 507.87), control2: pt(938.64, 578.76))
+        p.addCurve(to: pt(860.74, 819.53), control1: pt(929.62, 714.2), control2: pt(902.49, 773.89))
+        p.addCurve(to: pt(457.51, 827.04), control1: pt(752.69, 937.66), control2: pt(569.86, 940.79))
+        p.addCurve(to: pt(378.81, 597.21), control1: pt(398.04, 766.83), control2: pt(368.02, 683.86))
+        p.addCurve(to: pt(712.37, 360.5), control1: pt(398.78, 436.81), control2: pt(556.77, 326.38))
+        p.addCurve(to: pt(727.92, 383.59), control1: pt(722.92, 362.81), control2: pt(729.8, 372.96))
+        p.addCurve(to: pt(717.25, 417.27), control1: pt(725.86, 395.17), control2: pt(722.35, 406.5))
+        p.addCurve(to: pt(695.46, 428.37), control1: pt(713.35, 425.49), control2: pt(704.41, 430.05))
+        p.addCurve(to: pt(567.16, 444.47), control1: pt(652.48, 420.31), control2: pt(608.23, 425.22))
+        p.addCurve(to: pt(567.16, 444.47), control1: pt(567.16, 444.47), control2: pt(567.16, 444.47))
+        p.addCurve(to: pt(605.7, 536.44), control1: pt(584.63, 473.45), control2: pt(598.44, 503.25))
+        p.addCurve(to: pt(530.7, 797.28), control1: pt(626.51, 631.53), control2: pt(599.7, 727.71))
+        p.addCurve(to: pt(698.43, 834.98), control1: pt(578.58, 833.98), control2: pt(638.77, 847.64))
+        p.closeSubpath()
+        p.move(to: pt(511.19, 484.02))
+        p.addCurve(to: pt(484.7, 749.2), control1: pt(438.04, 553.61), control2: pt(426.6, 666.14))
+        p.addCurve(to: pt(511.19, 484.02), control1: pt(553.32, 675.75), control2: pt(563.91, 569.47))
+        p.closeSubpath()
+        return p
+    }
+}

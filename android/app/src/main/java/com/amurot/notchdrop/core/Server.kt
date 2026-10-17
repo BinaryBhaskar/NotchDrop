@@ -25,9 +25,14 @@ interface SessionDelegate {
     fun incomingProgress(done: Long, total: Long, name: String)
     fun incomingFinished(batch: ReceivedBatch)
     fun incomingFailed(error: Exception)
+    /** Lets the UI cancel the incoming transfer that is about to start. */
+    fun incomingStarted(control: TransferControl) {}
+    /** Shown on the other device when this one cancels, e.g. "Stopped on Pixel 8." */
+    val cancelNote: String get() = "Stopped on the phone."
 }
 
-class ProtocolServer(private val port: Int, private val delegate: SessionDelegate) {
+/** `resume` keeps an interrupted incoming batch so the sender can pick up where it stopped. */
+class ProtocolServer(private val port: Int, private val delegate: SessionDelegate, private val resume: ResumeStore = ResumeStore()) {
     @Volatile private var socket: ServerSocket? = null
     private val pool = Executors.newCachedThreadPool()
 
@@ -75,7 +80,12 @@ class ProtocolServer(private val port: Int, private val delegate: SessionDelegat
                     "bye" -> break@loop
                     "offer" -> {
                         inTransfer = true
-                        val batch = Transfer.receive(m.obj, ch, delegate.sink(), ProgressThrottle(delegate::incomingProgress))
+                        val control = TransferControl(delegate.cancelNote)
+                        control.attach(ch, receiving = true)
+                        delegate.incomingStarted(control)
+                        s.soTimeout = Wire.STALL_MS
+                        val batch = Transfer.receive(m.obj, ch, delegate.sink(), control, resume, ProgressThrottle(delegate::incomingProgress))
+                        s.soTimeout = 60_000
                         inTransfer = false
                         delegate.incomingFinished(batch)
                     }

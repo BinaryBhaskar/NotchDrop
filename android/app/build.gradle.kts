@@ -19,8 +19,8 @@ android {
     defaultConfig {
         applicationId = "com.amurot.notchdrop"
         minSdk = 29
-        // Stay on 35 so Android 17's opt-in local-network permission doesn't apply yet.
-        targetSdk = 35
+        // Play requires 36 for new apps and updates. Stay below 37, where Android 17's local-network permission applies.
+        targetSdk = 36
         versionCode = 5
         versionName = "1.2.1"
         // 64-bit ARM covers modern phones and Apple-silicon emulators; keeps ML Kit's native libs small.
@@ -36,12 +36,35 @@ android {
         }
     }
 
+    // github: the APK on GitHub Releases, which checks there for updates. play: Google Play, which updates it itself
+    // (Play policy forbids any other update path).
+    flavorDimensions += "store"
+    productFlavors {
+        create("github") {
+            dimension = "store"
+            buildConfigField("boolean", "SELF_UPDATE", "true")
+        }
+        create("play") {
+            dimension = "store"
+            buildConfigField("boolean", "SELF_UPDATE", "false")
+        }
+    }
+
     buildTypes {
+        // Installs next to the real app as "NotchDrop Dev" and listens on its own port, so both can be on one phone.
+        debug {
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+            resValue("string", "app_name", "NotchDrop Dev")
+            resValue("string", "share_label", "NotchDrop Dev")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName(if (releaseKeys != null) "release" else "debug")
+            resValue("string", "app_name", "NotchDrop")
+            resValue("string", "share_label", "Send to Mac")
         }
     }
     compileOptions {
@@ -51,6 +74,7 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        resValues = true
     }
     testOptions {
         unitTests.all {

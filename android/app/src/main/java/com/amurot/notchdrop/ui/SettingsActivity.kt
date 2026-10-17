@@ -4,11 +4,16 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.os.PowerManager
-import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
@@ -55,8 +60,12 @@ class SettingsActivity : ComponentActivity() {
                 SettingsScreen(
                     batteryOk = batteryOk,
                     onBack = ::finish,
-                    onBattery = {
-                        startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+                    onBattery = ::openBatterySettings,
+                    onPickFolder = { tree ->
+                        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                        runCatching { contentResolver.takePersistableUriPermission(tree, flags) }
+                            .onSuccess { Node.setSaveTree(tree) }
+                            .onFailure { Toast.makeText(this, "Couldn't use that folder", Toast.LENGTH_SHORT).show() }
                     },
                     onReceiveToggle = { on ->
                         Node.store.receiveEnabled = on
@@ -89,6 +98,7 @@ private fun SettingsScreen(
     batteryOk: Boolean,
     onBack: () -> Unit,
     onBattery: () -> Unit,
+    onPickFolder: (Uri) -> Unit,
     onReceiveToggle: (Boolean) -> Unit,
     onUnpair: () -> Unit,
     onOpenUrl: (String) -> Unit,
@@ -105,6 +115,7 @@ private fun SettingsScreen(
     var update by remember { mutableStateOf<Updates.Release?>(null) }
     val updateStatus by Updates.status.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+    val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { it?.let(onPickFolder) }
 
     LazyColumn(
         Modifier.fillMaxSize().background(Palette.bg).safeDrawingPadding(),
@@ -147,7 +158,17 @@ private fun SettingsScreen(
                     openLinks = it; store.openLinks = it
                 }
                 NdDivider()
-                NdRow("Save location", description = "Downloads/From <Mac name>", icon = NdIcons.Folder, tint = Palette.dim)
+                NdRow(
+                    "Save location",
+                    description = state.saveFolder ?: "Download/From ${state.peer?.displayName ?: "<Mac name>"}",
+                    icon = NdIcons.Folder,
+                    tint = Palette.accent2,
+                    onClick = { pickFolder.launch(null) },
+                ) {
+                    AnimatedVisibility(state.saveFolder != null, enter = fadeIn() + scaleIn(), exit = fadeOut() + scaleOut()) {
+                        NdButton("Reset", { Node.setSaveTree(null) }, style = NdButtonStyle.Text)
+                    }
+                }
             }
         }
 
@@ -157,11 +178,11 @@ private fun SettingsScreen(
                     NdRow(
                         "Background activity",
                         description = if (ok) "Unrestricted — your Mac can always reach this phone"
-                        else "Battery saving may pause NotchDrop, so the Mac can't reach it",
+                        else "Battery saving may pause NotchDrop. Set battery use to Unrestricted.",
                         icon = NdIcons.Battery,
                         tint = if (ok) Palette.ok else Palette.warn,
                         onClick = if (ok) null else onBattery,
-                    ) { if (!ok) NdButton("Allow", onBattery, style = NdButtonStyle.Tonal) }
+                    ) { if (!ok) NdButton("Open", onBattery, style = NdButtonStyle.Tonal) }
                 }
             }
         }
@@ -181,9 +202,10 @@ private fun SettingsScreen(
         item {
             NdGroup("About") {
                 NdRow("Version", icon = NdIcons.Info) { Text(BuildConfig.VERSION_NAME, color = Palette.dim, fontSize = 14.sp) }
-                NdDivider()
-                ToggleRow("Auto-check for updates", "Once a day, asks GitHub for the latest release", NdIcons.Refresh, autoUpdate) {
-                    autoUpdate = it; store.autoUpdateCheck = it
+                if (BuildConfig.SELF_UPDATE) {
+                    NdDivider()
+                    ToggleRow("Auto-check for updates", "Once a day, asks GitHub for the latest release", NdIcons.Refresh, autoUpdate) {
+                        autoUpdate = it; store.autoUpdateCheck = it
                 }
                 NdDivider()
                 NdRow(
@@ -199,9 +221,15 @@ private fun SettingsScreen(
                     tint = if (updateStatus is Updates.Status.Available) Palette.ok else Palette.accent,
                     onClick = { scope.launch { Updates.check(store, manual = true)?.let { update = it } } },
                 )
+                }
                 NdDivider()
                 NdRow("Source code", description = "github.com/BinaryBhaskar/NotchDrop", icon = NdIcons.Code, tint = Palette.accent2,
                     onClick = { onOpenUrl("https://github.com/BinaryBhaskar/NotchDrop") }) {
+                    NdIcon(NdIcons.Open, size = 18.dp, tint = Palette.dim)
+                }
+                NdDivider()
+                NdRow("Created by Amurot", description = "amurot.com", icon = NdIcons.Amurot, tint = Palette.text,
+                    onClick = { onOpenUrl("https://amurot.com") }) {
                     NdIcon(NdIcons.Open, size = 18.dp, tint = Palette.dim)
                 }
                 NdDivider()

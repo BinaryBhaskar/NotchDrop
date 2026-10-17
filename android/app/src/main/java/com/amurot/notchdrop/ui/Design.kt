@@ -109,6 +109,11 @@ object NdIcons {
     val Sun @Composable get() = res(R.drawable.ic_sun_outlined)
     val Moon @Composable get() = res(R.drawable.ic_moon_outlined)
     val Auto @Composable get() = res(R.drawable.ic_contrast_outlined)
+    val Search @Composable get() = res(R.drawable.ic_search_outlined)
+    val Share @Composable get() = res(R.drawable.ic_share_outlined)
+    val Send @Composable get() = res(R.drawable.ic_send_outlined)
+    val Sweep @Composable get() = res(R.drawable.ic_sweep_outlined)
+    val Amurot @Composable get() = res(R.drawable.ic_amurot_logo)
 }
 
 object NdSprings {
@@ -381,7 +386,15 @@ fun NdSegmented(options: List<Pair<String, ImageVector?>>, selected: Int, onSele
 }
 
 @Composable
-fun NdTextField(value: String, onValueChange: (String) -> Unit, modifier: Modifier = Modifier, placeholder: String = "", onDone: () -> Unit = {}) {
+fun NdTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    placeholder: String = "",
+    leading: ImageVector? = null,
+    imeAction: ImeAction = ImeAction.Done,
+    onDone: () -> Unit = {},
+) {
     val source = remember { MutableInteractionSource() }
     val focused by source.collectIsFocusedAsState()
     val border by animateColorAsState(if (focused) Palette.accent else Palette.lineStrong, label = "fieldBorder")
@@ -392,16 +405,23 @@ fun NdTextField(value: String, onValueChange: (String) -> Unit, modifier: Modifi
         interactionSource = source,
         textStyle = TextStyle(color = Palette.text, fontSize = 16.sp),
         cursorBrush = SolidColor(Palette.accent),
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-        keyboardActions = KeyboardActions(onDone = { onDone() }),
+        keyboardOptions = KeyboardOptions(imeAction = imeAction),
+        keyboardActions = KeyboardActions(onDone = { onDone() }, onSearch = { onDone() }),
         modifier = modifier.fillMaxWidth(),
         decorationBox = { inner ->
-            Box(
+            Row(
                 Modifier.fillMaxWidth().clip(NdShapes.control).background(Palette.surface2)
                     .border(1.5.dp, border, NdShapes.control).padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (value.isEmpty()) Text(placeholder, color = Palette.dim, fontSize = 16.sp)
-                inner()
+                if (leading != null) {
+                    NdIcon(leading, size = 20.dp, tint = Palette.dim)
+                    Spacer(Modifier.width(10.dp))
+                }
+                Box(Modifier.weight(1f)) {
+                    if (value.isEmpty()) Text(placeholder, color = Palette.dim, fontSize = 16.sp)
+                    inner()
+                }
             }
         },
     )

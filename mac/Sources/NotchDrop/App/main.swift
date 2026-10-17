@@ -17,11 +17,17 @@ if args.contains("--selftest") {
 }
 if args.count >= 3, args[1] == "--interop-server" {
     let key = args[2]
-    runBlocking { await SelfTest.interopServer(keyHex: key) }
+    let cancelAfter = args.count >= 4 ? Int64(args[3]) : nil
+    runBlocking { await SelfTest.interopServer(keyHex: key, cancelAfter: cancelAfter, resumable: args.count >= 5 && args[4] == "resume") }
 }
 if args.count >= 6, args[1] == "--interop-send", let port = UInt16(args[2]) {
     let (key, file, text) = (args[3], args[4], args[5])
-    runBlocking { await SelfTest.interopSend(port: port, keyHex: key, file: file, text: text) }
+    let cancelAfter = args.count >= 7 ? Int64(args[6]) : nil
+    let id = args.count >= 8 ? args[7] : nil
+    let dropAfter = args.count >= 9 ? Int64(args[8]) : nil
+    runBlocking {
+        await SelfTest.interopSend(port: port, keyHex: key, file: file, text: text, cancelAfter: cancelAfter, id: id, dropAfter: dropAfter)
+    }
 }
 if args.contains("--vectors") {
     SelfTest.vectors()

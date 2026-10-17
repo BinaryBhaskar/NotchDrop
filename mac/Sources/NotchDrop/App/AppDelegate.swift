@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var notch: NotchController!
     private var pairWindow: PairWindowController!
     private var settings: SettingsWindowController!
+    private var historyWindow: HistoryWindowController!
     private var statusItem: NSStatusItem!
     private var bag = Set<AnyCancellable>()
 
@@ -16,11 +17,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Self.shared = self
         // Checked first: the launch Apple Event is only available during this call.
         let asLoginItem = launchedAsLoginItem()
+        // Launched by the Share menu (notchdrop://share) or a Services item: just send, no window.
+        let quietLaunch = asLoginItem || launchedForURL()
         app.start()
         notch = NotchController(app: app)
         pairWindow = PairWindowController(app: app)
         settings = SettingsWindowController(app: app)
         settings.onPair = { [weak self] in self?.pairWindow.show() }
+        historyWindow = HistoryWindowController(app: app)
+        Notifier.shared.start()
 
         Hotkey.shared.onPress = { [weak self] in self?.app.sendSelection() }
         prefs.$shortcut.sink { Hotkey.shared.register($0) }.store(in: &bag)
@@ -32,11 +37,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         app.$reachable.combineLatest(app.$peer).sink { [weak self] reachable, peer in
             self?.updateIcon(paired: peer != nil, reachable: reachable)
         }.store(in: &bag)
+        NSApp.servicesProvider = self
+        NSUpdateDynamicServices()
         prefs.$showMenuBarIcon.sink { [weak self] in self?.statusItem.isVisible = $0 }.store(in: &bag)
 
         if app.peer == nil {
             pairWindow.show()
-        } else if !asLoginItem {
+        } else if !quietLaunch {
             settings.show()
         }
         prefs.$autoCheckUpdates.dropFirst().filter { $0 }.sink { _ in
@@ -50,6 +57,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         settings.show()
         return false
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls where url.scheme == "notchdrop" && url.host == "share" {
+            app.sendShared()
+        }
+    }
+
+    /// Services menu: "Send to Phone with NotchDrop" on selected files or text in any app.
+    @objc func sendToPhone(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
+        guard app.peer != nil else {
+            error.pointee = "Pair a phone with NotchDrop first." as NSString
+            pairWindow.show()
+            return
+        }
+        app.send(pasteboard: pboard)
+    }
+
+    private func launchedForURL() -> Bool {
+        NSAppleEventManager.shared().currentAppleEvent?.eventID == AEEventID(kAEGetURL)
     }
 
     private func launchedAsLoginItem() -> Bool {
@@ -81,6 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 menu.addItem(disabled("Send Selection  \(s.display)"))
             }
             menu.addItem(item("Open Received Folder", #selector(openFolder), ""))
+            menu.addItem(item("History…", #selector(openHistory), "y"))
             menu.addItem(.separator())
             menu.addItem(item("Rename \(peer.displayName)…", #selector(renamePeer), ""))
             menu.addItem(item("Pair a Different Phone…", #selector(pair), ""))
@@ -111,6 +139,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return i
     }
 
+    @objc func openHistory() { historyWindow.show() }
+
     @objc func sendFiles() {
         guard app.peer != nil else { pairWindow.show(); return }
         let panel = NSOpenPanel()
@@ -123,7 +153,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func sendClipboard() { app.sendClipboard() }
 
-    @objc private func openFolder() {
+    @objc private func openFolder() { openReceivedFolder() }
+
+    func showSettings(_ pane: SettingsPane? = nil) { settings.show(pane) }
+
+    func openReceivedFolder() {
         let dir = app.store.receiveDirectory
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         NSWorkspace.shared.open(dir)

@@ -65,6 +65,7 @@ final class Prefs: ObservableObject {
         static let zoneWidth = "zoneWidth"
         static let zoneHeight = "zoneHeight"
         static let openOnHover = "openOnHover"
+        static let swipeToOpen = "swipeToOpen"
         static let showMenuBarIcon = "showMenuBarIcon"
         static let sounds = "sounds"
         static let haptics = "haptics"
@@ -72,6 +73,7 @@ final class Prefs: ObservableObject {
         static let saveFolder = "saveFolder"
         static let copyText = "copyReceivedText"
         static let openLinks = "openReceivedLinks"
+        static let notify = "notifyReceived"
         static let shortcut = "sendShortcut"
         static let askedAccessibility = "askedAccessibility"
         static let autoCheckUpdates = "autoCheckUpdates"
@@ -87,12 +89,16 @@ final class Prefs: ObservableObject {
     @Published var zoneWidth: Double { didSet { d.set(zoneWidth, forKey: Key.zoneWidth) } }
     @Published var zoneHeight: Double { didSet { d.set(zoneHeight, forKey: Key.zoneHeight) } }
     @Published var openOnHover: Bool { didSet { d.set(openOnHover, forKey: Key.openOnHover) } }
+    /// A two-finger swipe down on the notch opens it.
+    @Published var swipeToOpen: Bool { didSet { d.set(swipeToOpen, forKey: Key.swipeToOpen) } }
     @Published var showMenuBarIcon: Bool { didSet { d.set(showMenuBarIcon, forKey: Key.showMenuBarIcon) } }
     @Published var sounds: Bool { didSet { d.set(sounds, forKey: Key.sounds) } }
     @Published var haptics: Bool { didSet { d.set(haptics, forKey: Key.haptics) } }
     @Published var confirmReceive: Bool { didSet { d.set(confirmReceive, forKey: Key.confirmReceive) } }
     @Published var copyText: Bool { didSet { d.set(copyText, forKey: Key.copyText) } }
     @Published var openLinks: Bool { didSet { d.set(openLinks, forKey: Key.openLinks) } }
+    /// Post a notification for received items. Always on while the notch is off, since nothing else would show them.
+    @Published var notify: Bool { didSet { d.set(notify, forKey: Key.notify) } }
     /// Opt-in daily check of GitHub Releases.
     @Published var autoCheckUpdates: Bool { didSet { d.set(autoCheckUpdates, forKey: Key.autoCheckUpdates) } }
     /// nil = default per-phone folder in Downloads.
@@ -106,19 +112,21 @@ final class Prefs: ObservableObject {
     private init() {
         d.register(defaults: [
             Key.notchEnabled: true, Key.zoneWidth: Double(Self.defaultZone.width), Key.zoneHeight: Double(Self.defaultZone.height),
-            Key.openOnHover: false, Key.showMenuBarIcon: true, Key.sounds: true, Key.haptics: true,
-            Key.confirmReceive: false, Key.copyText: true, Key.openLinks: false, Key.autoCheckUpdates: false,
+            Key.openOnHover: false, Key.swipeToOpen: true, Key.showMenuBarIcon: true, Key.sounds: true, Key.haptics: true,
+            Key.confirmReceive: false, Key.copyText: true, Key.openLinks: false, Key.notify: false, Key.autoCheckUpdates: false,
         ])
         notchEnabled = d.bool(forKey: Key.notchEnabled)
         zoneWidth = d.double(forKey: Key.zoneWidth).clamped(to: Self.zoneWidthRange)
         zoneHeight = d.double(forKey: Key.zoneHeight).clamped(to: Self.zoneHeightRange)
         openOnHover = d.bool(forKey: Key.openOnHover)
+        swipeToOpen = d.bool(forKey: Key.swipeToOpen)
         showMenuBarIcon = d.bool(forKey: Key.showMenuBarIcon)
         sounds = d.bool(forKey: Key.sounds)
         haptics = d.bool(forKey: Key.haptics)
         confirmReceive = d.bool(forKey: Key.confirmReceive)
         copyText = d.bool(forKey: Key.copyText)
         openLinks = d.bool(forKey: Key.openLinks)
+        notify = d.bool(forKey: Key.notify)
         autoCheckUpdates = d.bool(forKey: Key.autoCheckUpdates)
         saveFolder = d.string(forKey: Key.saveFolder).map { URL(fileURLWithPath: $0, isDirectory: true) }
         shortcut = d.data(forKey: Key.shortcut).flatMap { try? JSONDecoder().decode(Shortcut.self, from: $0) }

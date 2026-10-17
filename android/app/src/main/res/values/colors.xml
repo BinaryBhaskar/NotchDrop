@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="bg">#FF0E0F13</color>
+    <color name="shortcut_clipboard">#FF5C94FF</color>
+    <color name="shortcut_files">#FF9E73FF</color>
+    <color name="shortcut_received">#FF4DD97A</color>
+    <color name="shortcut_scan">#FF5C94FF</color>
 </resources>

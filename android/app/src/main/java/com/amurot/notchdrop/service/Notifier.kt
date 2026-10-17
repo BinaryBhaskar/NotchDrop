@@ -1,6 +1,5 @@
 package com.amurot.notchdrop.service
 
-import android.app.DownloadManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -61,12 +60,18 @@ object Notifier {
             .setContentTitle(title)
             .apply { if (text != null) setContentText(text) }
             .apply { if (progress != null) setProgress(100, progress.coerceAtLeast(0), progress < 0) }
+            .apply { if (state.busy) addAction(cancelAction(ctx)) }
             .setContentIntent(openApp(ctx))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .apply { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE) }
             .build()
     }
+
+    private fun cancelAction(ctx: Context) = Notification.Action.Builder(
+        null, "Cancel",
+        PendingIntent.getBroadcast(ctx, 1, Intent(ctx, CancelReceiver::class.java), PendingIntent.FLAG_IMMUTABLE),
+    ).build()
 
     private fun pct(done: Long, total: Long) = if (total <= 0) 100 else (done * 100 / total).toInt()
 
@@ -78,14 +83,14 @@ object Notifier {
                 Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(one.uri), one.mime)
                     .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
             } else {
-                Intent(DownloadManager.ACTION_VIEW_DOWNLOADS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                Places.folderIntent(ctx)
             }
             val id = ids.incrementAndGet()
             val pi = PendingIntent.getActivity(ctx, id, open, PendingIntent.FLAG_IMMUTABLE)
             val n = Notification.Builder(ctx, CH_RECEIVED)
                 .setSmallIcon(R.drawable.ic_notify)
                 .setContentTitle(one?.name ?: "${batch.files.size} files from $mac")
-                .setContentText(if (one != null) "From $mac · Downloads/From $mac" else batch.files.joinToString { it.name })
+                .setContentText(if (one != null) "From $mac · ${Node.saveLabel}" else batch.files.joinToString { it.name })
                 .setContentIntent(pi)
                 .setAutoCancel(true)
                 .build()
@@ -123,6 +128,14 @@ object Notifier {
             }
             nm.notify(id, b.build())
         }
+    }
+}
+
+/** The "Cancel" action on the progress notification. */
+class CancelReceiver : BroadcastReceiver() {
+    override fun onReceive(ctx: Context, intent: Intent) {
+        Node.init(ctx)
+        Node.cancelTransfer()
     }
 }
 

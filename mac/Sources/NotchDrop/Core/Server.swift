@@ -8,6 +8,8 @@ protocol SessionDelegate: AnyObject {
     func myHello() -> [String: Any]
     func didReceiveHello(_ hello: [String: Any], mode: String, remoteHost: String?)
     func saveDirectory() -> URL
+    /// Lets the UI cancel the incoming transfer that is about to start.
+    func incomingStarted(_ control: TransferControl)
     func incomingProgress(done: Int64, total: Int64, name: String)
     func incomingFinished(_ batch: ReceivedBatch)
     func incomingFailed(_ error: Error)
@@ -17,6 +19,7 @@ protocol SessionDelegate: AnyObject {
 
 extension SessionDelegate {
     func shouldAccept(offer: [String: Any]) async -> Bool { true }
+    func incomingStarted(_ control: TransferControl) {}
 }
 
 final class ProtocolServer: @unchecked Sendable {
@@ -29,8 +32,11 @@ final class ProtocolServer: @unchecked Sendable {
     private let requestedPort: NWEndpoint.Port
     private var advertisement: Advertisement?
     weak var delegate: SessionDelegate?
+    /// The last interrupted incoming batch, kept so the sender can resume it.
+    let resume: ResumeStore
 
-    init(port: UInt16, advertise: Advertisement?) {
+    init(port: UInt16, advertise: Advertisement?, resume: ResumeStore = ResumeStore()) {
+        self.resume = resume
         requestedPort = port == 0 ? .any : NWEndpoint.Port(rawValue: port)!
         advertisement = advertise
     }
@@ -97,7 +103,8 @@ final class ProtocolServer: @unchecked Sendable {
             d.didReceiveHello(hello, mode: hs.mode, remoteHost: fc.remoteHost)
 
             loop: while true {
-                guard case .json(let msg) = try await ch.receive() else { throw NDError.badFrame("unexpected data") }
+                // An idle session that hears nothing for a minute is gone (e.g. the phone left the network).
+                guard case .json(let msg) = try await withTimeout(60, { try await ch.receive() }) else { throw NDError.badFrame("unexpected data") }
                 switch msg["t"] as? String {
                 case "bye":
                     break loop
@@ -107,8 +114,12 @@ final class ProtocolServer: @unchecked Sendable {
                         break loop
                     }
                     inTransfer = true
+                    let control = TransferControl(note: "Stopped on \(d.myHello()["name"] as? String ?? "the Mac").")
+                    control.attach(ch, receiving: true)
+                    d.incomingStarted(control)
                     let throttle = ProgressThrottle { d.incomingProgress(done: $0, total: $1, name: $2) }
-                    let batch = try await Transfer.receive(offer: msg, over: ch, saveDir: d.saveDirectory()) {
+                    let batch = try await Transfer.receive(offer: msg, over: ch, saveDir: d.saveDirectory(), control: control,
+                                                           resume: resume) {
                         throttle($0, $1, $2)
                     }
                     inTransfer = false

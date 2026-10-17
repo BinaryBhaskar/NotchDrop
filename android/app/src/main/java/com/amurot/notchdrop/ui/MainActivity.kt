@@ -10,7 +10,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
-import android.text.format.DateUtils
+import android.util.Patterns
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -28,6 +28,28 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.input.ImeAction
+import com.amurot.notchdrop.BuildConfig
+import com.amurot.notchdrop.service.Places
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.border
@@ -74,9 +96,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        const val ACTION_PICK_FILES = "com.amurot.notchdrop.PICK_FILES"
+        const val ACTION_OPEN_FOLDER = "com.amurot.notchdrop.OPEN_FOLDER"
+        const val ACTION_SCAN = "com.amurot.notchdrop.SCAN"
+    }
+
     private var batteryOk by mutableStateOf(true)
     private var askUpdates by mutableStateOf(false)
     private var update by mutableStateOf<Updates.Release?>(null)
+    /** Set by app shortcuts that need the screen (the file picker). */
+    private var launchAction by mutableStateOf<String?>(null)
+    private var undo by mutableStateOf<Undo?>(null)
+    private var undoJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,6 +118,7 @@ class MainActivity : ComponentActivity() {
         ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
+        if (savedInstanceState == null) handleShortcut(intent)
         setContent {
             NotchTheme {
                 SystemBars(this)
@@ -93,20 +126,27 @@ class MainActivity : ComponentActivity() {
                 MainScreen(
                     state = state,
                     batteryOk = batteryOk,
+                    launchAction = launchAction,
+                    onLaunchHandled = { launchAction = null },
+                    undo = undo,
                     onScan = { startActivity(Intent(this, ScanActivity::class.java)) },
                     onSendUris = ::sendUris,
                     onSendClipboard = ::sendClipboard,
                     onRefresh = { Node.scheduleRefresh(0) },
                     onSettings = { startActivity(Intent(this, SettingsActivity::class.java)) },
-                    onBattery = {
-                        startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
-                    },
+                    onBattery = ::openBatterySettings,
                     onDismissBattery = {
                         Node.store.batteryPromptDismissed = true
                         batteryOk = true
                     },
-                    onOpenEntry = ::openEntry,
+                    onAction = ::act,
+                    onClearRecents = {
+                        val all = state.history
+                        Node.clearHistory()
+                        offerUndo("Cleared ${all.size} recent ${if (all.size == 1) "item" else "items"}", all)
+                    },
                     onDismissActivity = Node::dismissActivity,
+                    onCancelTransfer = Node::cancelTransfer,
                 )
                 if (askUpdates) {
                     UpdateOptInDialog { on ->
@@ -127,15 +167,29 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleShortcut(intent)
+    }
+
+    private fun handleShortcut(intent: Intent?) {
+        when (intent?.action) {
+            ACTION_SCAN -> startActivity(Intent(this, ScanActivity::class.java))
+            ACTION_OPEN_FOLDER -> Places.openFolder(this)
+            ACTION_PICK_FILES -> launchAction = ACTION_PICK_FILES
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         Node.uiVisible = true
         NodeService.start(this)
         Node.scheduleRefresh(0)
+        Node.pruneHistory()
         batteryOk = Node.store.batteryPromptDismissed ||
             getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
         // Ask about automatic update checks once, after pairing so it doesn't crowd the first run.
-        if (!Node.store.updatePromptShown && Node.store.peer != null) {
+        if (BuildConfig.SELF_UPDATE && !Node.store.updatePromptShown && Node.store.peer != null) {
             Node.store.updatePromptShown = true
             askUpdates = true
         }
@@ -143,6 +197,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun checkForUpdate() {
+        if (!BuildConfig.SELF_UPDATE) return
         lifecycleScope.launch { Updates.check(Node.store, manual = false)?.let { update = it } }
     }
 
@@ -178,22 +233,67 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun openEntry(e: HistoryEntry) {
-        when {
-            e.uri != null -> runCatching {
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(e.uri)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
-            }.onFailure { Toast.makeText(this, "Can't open this file", Toast.LENGTH_SHORT).show() }
-            e.text != null -> {
-                getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("From Mac", e.text))
+    private fun act(e: HistoryEntry, action: RecentAction) {
+        val uri = e.uri?.let(Uri::parse)
+        when (action) {
+            RecentAction.Open -> when {
+                uri != null -> runCatching { Places.open(this, uri, e.mime ?: Places.mimeOf(this, uri, e.title)) }
+                    .onFailure { toast("No app can open this file") }
+                e.text != null && Patterns.WEB_URL.matcher(e.text.trim()).matches() ->
+                    openUrl(e.text.trim().let { if ("://" in it) it else "https://$it" })
+                e.text != null -> copy(e.text)
+                else -> toast("Sent files stay where they were on this phone")
+            }
+            RecentAction.ShowInFiles -> Places.openFolder(this)
+            RecentAction.Share -> runCatching { Places.share(this, uri, e.mime, e.text) }
+            RecentAction.Copy -> e.text?.let(::copy)
+            RecentAction.Resend -> if (Node.resend(e) == null) toast("This file is no longer there")
+            RecentAction.Remove -> {
+                Node.removeHistory(e.id)
+                offerUndo("Removed from Recent", listOf(e))
             }
         }
     }
+
+    private fun copy(text: String) {
+        getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("NotchDrop", text))
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) toast("Copied")
+    }
+
+    private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+
+    private fun offerUndo(message: String, entries: List<HistoryEntry>) {
+        if (entries.isEmpty()) return
+        val u = Undo(message, entries) { Node.restoreHistory(entries); undo = null }
+        undo = u
+        undoJob?.cancel()
+        undoJob = lifecycleScope.launch {
+            delay(5000)
+            if (undo === u) undo = null
+        }
+    }
+}
+
+/** Something just removed, with the way to put it back. */
+class Undo(val message: String, val entries: List<HistoryEntry>, val restore: () -> Unit)
+
+/**
+ * Opens this app's battery page. Apps outside Play's allowed categories may not ask for the exemption directly,
+ * so the user picks "Unrestricted" there.
+ */
+fun ComponentActivity.openBatterySettings() {
+    val details = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+    runCatching { startActivity(details) }
+        .onFailure { runCatching { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } }
 }
 
 @Composable
 private fun MainScreen(
     state: NodeState,
     batteryOk: Boolean,
+    launchAction: String?,
+    onLaunchHandled: () -> Unit,
+    undo: Undo?,
     onScan: () -> Unit,
     onSendUris: (List<Uri>) -> Unit,
     onSendClipboard: () -> Unit,
@@ -201,89 +301,185 @@ private fun MainScreen(
     onSettings: () -> Unit,
     onBattery: () -> Unit,
     onDismissBattery: () -> Unit,
-    onOpenEntry: (HistoryEntry) -> Unit,
+    onAction: (HistoryEntry, RecentAction) -> Unit,
+    onClearRecents: () -> Unit,
     onDismissActivity: () -> Unit,
+    onCancelTransfer: () -> Unit,
 ) {
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { onSendUris(it) }
     val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { onSendUris(it) }
+    var menuFor by remember { mutableStateOf<HistoryEntry?>(null) }
+    var query by rememberSaveable { mutableStateOf("") }
 
-    LazyColumn(
-        Modifier.fillMaxSize().background(Palette.bg).safeDrawingPadding(),
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        item(key = "top") {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("NotchDrop", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Palette.text)
-                Spacer(Modifier.weight(1f))
-                AnimatedVisibility(state.peer != null, enter = fadeIn() + scaleIn(), exit = fadeOut() + scaleOut()) {
-                    NdIconButton(NdIcons.Refresh, "Refresh", onRefresh)
-                }
-                Spacer(Modifier.width(8.dp))
-                NdIconButton(NdIcons.Settings, "Settings", onSettings)
-            }
-        }
+    LaunchedEffect(launchAction) {
+        if (launchAction == MainActivity.ACTION_PICK_FILES && state.peer != null) pick.launch(arrayOf("*/*"))
+        if (launchAction != null) onLaunchHandled()
+    }
 
-        item(key = "mac") { MacCard(state, onScan, Modifier.animateItem()) }
+    val history = state.history
+    val shown = remember(history, query) {
+        val q = query.trim()
+        if (q.isEmpty()) history else history.filter { it.title.contains(q, true) || it.text?.contains(q, true) == true }
+    }
 
-        item(key = "activity") {
-            AnimatedVisibility(
-                state.activity != Activity.Idle,
-                enter = expandVertically(NdSprings.smooth()) + fadeIn(),
-                exit = shrinkVertically(NdSprings.smooth()) + fadeOut(),
-            ) { ActivityCard(state, onDismissActivity) }
-        }
-
-        if (state.peer != null) {
-            item(key = "actions") {
-                Row(Modifier.animateItem(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    ActionTile(NdIcons.Image, "Photos", Palette.accent, Modifier.weight(1f), enabled = !state.busy) {
-                        pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+    Box(Modifier.fillMaxSize().background(Palette.bg)) {
+        LazyColumn(
+            Modifier.fillMaxSize().safeDrawingPadding(),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 96.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item(key = "top") {
+                Row(Modifier.entrance(0).padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("NotchDrop", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Palette.text)
+                    Spacer(Modifier.weight(1f))
+                    AnimatedVisibility(state.peer != null, enter = fadeIn() + scaleIn(), exit = fadeOut() + scaleOut()) {
+                        NdIconButton(NdIcons.Refresh, "Refresh", onRefresh)
                     }
-                    ActionTile(NdIcons.Folder, "Files", Palette.accent2, Modifier.weight(1f), enabled = !state.busy) {
-                        pick.launch(arrayOf("*/*"))
-                    }
-                    ActionTile(NdIcons.Paste, "Clipboard", Palette.ok, Modifier.weight(1f), enabled = !state.busy, onClick = onSendClipboard)
+                    Spacer(Modifier.width(8.dp))
+                    NdIconButton(NdIcons.Settings, "Settings", onSettings)
                 }
             }
-            item(key = "tip") {
-                Text(
-                    "Tip: in any app, tap Share → NotchDrop. On the Mac, drag anything onto the notch to send it here.",
-                    color = Palette.dim, fontSize = 13.sp, lineHeight = 18.sp,
-                    modifier = Modifier.animateItem().padding(horizontal = 4.dp),
-                )
-            }
-        }
 
-        if (!batteryOk && state.peer != null) {
-            item(key = "battery") {
-                NdCard(Modifier.animateItem()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        NdIconTile(NdIcons.Battery, Palette.warn, size = 40.dp)
-                        Column(Modifier.weight(1f).padding(start = 14.dp)) {
-                            Text("Allow background receiving", color = Palette.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                            Text("Battery saving may pause NotchDrop, so the Mac can't reach it.", color = Palette.dim, fontSize = 13.sp, lineHeight = 17.sp)
+            item(key = "mac") { MacCard(state, onScan, Modifier.animateItem().entrance(1)) }
+
+            item(key = "activity") {
+                AnimatedVisibility(
+                    state.activity != Activity.Idle,
+                    enter = expandVertically(NdSprings.smooth()) + fadeIn(),
+                    exit = shrinkVertically(NdSprings.smooth()) + fadeOut(),
+                ) { ActivityCard(state, onDismissActivity, onCancelTransfer) }
+            }
+
+            if (state.peer != null) {
+                item(key = "actions") {
+                    Row(Modifier.animateItem(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        ActionTile(NdIcons.Image, "Photos", Palette.accent, Modifier.weight(1f).entrance(2), enabled = !state.busy) {
+                            pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                        }
+                        ActionTile(NdIcons.Folder, "Files", Palette.accent2, Modifier.weight(1f).entrance(3), enabled = !state.busy) {
+                            pick.launch(arrayOf("*/*"))
+                        }
+                        ActionTile(NdIcons.Paste, "Clipboard", Palette.ok, Modifier.weight(1f).entrance(4), enabled = !state.busy, onClick = onSendClipboard)
+                    }
+                }
+            }
+
+            if (!batteryOk && state.peer != null) {
+                item(key = "battery") {
+                    NdCard(Modifier.animateItem()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            NdIconTile(NdIcons.Battery, Palette.warn, size = 40.dp)
+                            Column(Modifier.weight(1f).padding(start = 14.dp)) {
+                                Text("Allow background receiving", color = Palette.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    "Battery saving may pause NotchDrop, so the Mac can't reach it. Set battery use to Unrestricted.",
+                                    color = Palette.dim, fontSize = 13.sp, lineHeight = 17.sp,
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(14.dp))
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
+                            NdButton("Not now", onDismissBattery, style = NdButtonStyle.Text)
+                            NdButton("Open settings", onBattery, style = NdButtonStyle.Tonal)
                         }
                     }
-                    Spacer(Modifier.height(14.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
-                        NdButton("Not now", onDismissBattery, style = NdButtonStyle.Text)
-                        NdButton("Allow", onBattery, style = NdButtonStyle.Tonal)
+                }
+            }
+
+            if (state.peer != null && history.isEmpty()) {
+                item(key = "tip") {
+                    Column(
+                        Modifier.animateItem().fillMaxWidth().padding(top = 28.dp).entrance(5),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        NdIcon(NdIcons.Share, size = 28.dp, tint = Palette.dim)
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            "Nothing here yet. In any app, tap Share → NotchDrop.\nOn the Mac, drag anything onto the notch.",
+                            color = Palette.dim, fontSize = 13.sp, lineHeight = 19.sp, textAlign = TextAlign.Center,
+                        )
                     }
+                }
+            }
+
+            if (history.isNotEmpty()) {
+                item(key = "recentHeader") {
+                    Row(Modifier.animateItem().padding(top = 10.dp, start = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("RECENT", color = Palette.accent, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp)
+                        Spacer(Modifier.width(8.dp))
+                        AnimatedContent(history.size, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "count") { n ->
+                            Text("$n", color = Palette.dim, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        Spacer(Modifier.weight(1f))
+                        Row(
+                            Modifier.ndClickable(pressedScale = 0.92f, shape = NdShapes.control, rippleColor = Palette.bad, onClick = onClearRecents)
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            NdIcon(NdIcons.Sweep, size = 16.dp, tint = Palette.dim)
+                            Spacer(Modifier.width(6.dp))
+                            Text("Clear", color = Palette.dim, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+                if (history.size > 8) {
+                    item(key = "search") {
+                        NdTextField(
+                            query, { query = it.take(60) }, Modifier.animateItem(),
+                            placeholder = "Search recent", leading = NdIcons.Search, imeAction = ImeAction.Search,
+                        )
+                    }
+                }
+                if (shown.isEmpty()) {
+                    item(key = "noMatch") {
+                        Text(
+                            "No matches for “${query.trim()}”", color = Palette.dim, fontSize = 13.sp,
+                            modifier = Modifier.animateItem().fillMaxWidth().padding(vertical = 18.dp), textAlign = TextAlign.Center,
+                        )
+                    }
+                }
+                items(shown, key = { it.id }) { e ->
+                    RecentRow(
+                        e,
+                        onAction = { onAction(e, it) },
+                        onMenu = { menuFor = e },
+                        modifier = Modifier.animateItem(fadeInSpec = tween(220), placementSpec = NdSprings.smooth(), fadeOutSpec = tween(160)),
+                    )
                 }
             }
         }
 
-        if (state.history.isNotEmpty()) {
-            item(key = "history") {
-                NdGroup("Recent", Modifier.animateItem().padding(top = 6.dp)) {
-                    state.history.take(20).forEachIndexed { i, e ->
-                        if (i > 0) NdDivider()
-                        HistoryRow(e) { onOpenEntry(e) }
-                    }
-                }
-            }
+        AnimatedVisibility(
+            undo != null,
+            Modifier.align(Alignment.BottomCenter).safeDrawingPadding().padding(horizontal = 20.dp, vertical = 16.dp),
+            enter = slideInVertically(NdSprings.snappy()) { it * 2 } + fadeIn(),
+            exit = slideOutVertically(NdSprings.smooth()) { it * 2 } + fadeOut(),
+        ) {
+            // Keep the last message while sliding out.
+            var last by remember { mutableStateOf(undo) }
+            if (undo != null) last = undo
+            last?.let { UndoBar(it.message, it.restore) }
         }
+    }
+
+    menuFor?.let { e -> RecentMenu(e, onDismiss = { menuFor = null }, onAction = { onAction(e, it) }) }
+}
+
+/** Fades and lifts content in once, staggered by [index], the first time it's shown. */
+@Composable
+private fun Modifier.entrance(index: Int): Modifier {
+    val shown = rememberSaveable { mutableStateOf(false) }
+    val progress = remember { Animatable(if (shown.value) 1f else 0f) }
+    LaunchedEffect(Unit) {
+        if (!shown.value) {
+            delay(40L * index)
+            progress.animateTo(1f, NdSprings.smooth())
+            shown.value = true
+        }
+    }
+    return graphicsLayer {
+        alpha = progress.value
+        translationY = (1f - progress.value) * 24.dp.toPx()
     }
 }
 
@@ -297,7 +493,20 @@ private fun MacCard(state: NodeState, onScan: () -> Unit, modifier: Modifier = M
             .padding(22.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        NdIconTile(NdIcons.Laptop, Palette.accent, size = 68.dp)
+        Box(contentAlignment = Alignment.Center) {
+            // A slow breathing halo while the Mac is reachable.
+            if (peer != null && state.reachable) {
+                val breath by rememberInfiniteTransition(label = "breath").animateFloat(
+                    0f, 1f, infiniteRepeatable(tween(2400), RepeatMode.Reverse), label = "breath",
+                )
+                Box(
+                    Modifier.size(68.dp).scale(1.1f + 0.25f * breath)
+                        .graphicsLayer { alpha = 0.28f * (1f - breath) + 0.06f }
+                        .background(Palette.ok, CircleShape)
+                )
+            }
+            NdIconTile(NdIcons.Laptop, Palette.accent, size = 68.dp)
+        }
         Spacer(Modifier.height(14.dp))
         AnimatedContent(
             peer,
@@ -326,7 +535,7 @@ private fun MacCard(state: NodeState, onScan: () -> Unit, modifier: Modifier = M
 }
 
 @Composable
-private fun ActivityCard(state: NodeState, onDismiss: () -> Unit) {
+private fun ActivityCard(state: NodeState, onDismiss: () -> Unit, onCancel: () -> Unit) {
     val a = state.activity
     val mac = state.peer?.displayName ?: "Mac"
     val (title, sub, fraction, color) = when (a) {
@@ -340,12 +549,14 @@ private fun ActivityCard(state: NodeState, onDismiss: () -> Unit) {
             1f, Palette.ok,
         )
         is Activity.Failed -> Quad("Couldn't complete", a.message, 0f, Palette.bad)
+        is Activity.Cancelled -> Quad("Transfer cancelled", a.message, 0f, Palette.dim)
         Activity.Idle -> Quad("", "", 0f, Palette.dim)
     }
     val icon = when (a) {
         is Activity.Sending, is Activity.Connecting -> NdIcons.Up
         is Activity.Receiving -> NdIcons.Down
         is Activity.Failed -> NdIcons.Warning
+        is Activity.Cancelled -> NdIcons.Close
         else -> NdIcons.Check
     }
     NdCard {
@@ -357,7 +568,15 @@ private fun ActivityCard(state: NodeState, onDismiss: () -> Unit) {
                 Text(title, color = Palette.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                 if (sub.isNotEmpty()) Text(sub, color = Palette.dim, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            if (!state.busy) NdButton("OK", onDismiss, style = NdButtonStyle.Text)
+            val resumable = state.resumable.takeIf { a is Activity.Failed }
+            when {
+                state.busy -> NdButton("Cancel", onCancel, style = NdButtonStyle.Text)
+                resumable != null -> Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    NdButton("OK", onDismiss, style = NdButtonStyle.Text)
+                    NdButton(if (resumable.sentAny) "Resume" else "Retry", { Node.resumeSend() }, style = NdButtonStyle.Text)
+                }
+                else -> NdButton("OK", onDismiss, style = NdButtonStyle.Text)
+            }
         }
         AnimatedVisibility(state.busy) {
             Column {
@@ -386,16 +605,4 @@ private fun ActionTile(icon: ImageVector, label: String, tint: Color, modifier: 
         Spacer(Modifier.height(10.dp))
         Text(label, color = if (enabled) Palette.text else Palette.dim, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
     }
-}
-
-@Composable
-private fun HistoryRow(e: HistoryEntry, onClick: () -> Unit) {
-    NdRow(
-        title = e.title,
-        description = "${e.detail} · ${DateUtils.getRelativeTimeSpanString(e.time, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)}",
-        icon = if (e.incoming) NdIcons.Down else NdIcons.Up,
-        tint = if (e.incoming) Palette.accent2 else Palette.accent,
-        onClick = onClick,
-        trailing = { NdIcon(if (e.uri != null) NdIcons.Open else NdIcons.Copy, size = 18.dp, tint = Palette.dim) },
-    )
 }

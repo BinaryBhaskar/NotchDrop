@@ -24,12 +24,20 @@ object Wire {
     const val SERVICE_TYPE = "_notchdrop._tcp"
     const val MAX_FRAME = 4 * 1024 * 1024
     const val CHUNK = 256 * 1024
+    /** A transfer that makes no progress for this long has lost its connection. */
+    const val STALL_MS = 20_000
+
+    /** Sent by either side to stop a running transfer. */
+    fun cancelFrame(note: String): JSONObject = JSONObject().put("t", "error").put("message", note).put("cancelled", true)
 
     private val rng = SecureRandom()
     fun randomBytes(n: Int) = ByteArray(n).also { rng.nextBytes(it) }
 }
 
-class NDException(message: String) : IOException(message)
+open class NDException(message: String) : IOException(message)
+
+/** The transfer was stopped on purpose, here or on the other device; the message says which. */
+class CancelledException(message: String) : NDException(message)
 
 /** Length-prefixed frames over a blocking TCP socket. */
 class FrameConn(val socket: Socket) : Closeable {
@@ -143,7 +151,10 @@ class SecureChannel(val conn: FrameConn, txKey: ByteArray, rxKey: ByteArray) : C
         return when (p[0].toInt()) {
             1 -> {
                 val obj = JSONObject(String(p, 1, p.size - 1, Charsets.UTF_8))
-                if (obj.optString("t") == "error") throw NDException(obj.optString("message", "Remote error"))
+                if (obj.optString("t") == "error") {
+                    val message = obj.optString("message", "Remote error")
+                    throw if (obj.optBoolean("cancelled")) CancelledException(message) else NDException(message)
+                }
                 WireMessage.Json(obj)
             }
             2 -> WireMessage.Chunk(p.copyOfRange(1, p.size))

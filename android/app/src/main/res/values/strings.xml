@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">NotchDrop</string>
-    <string name="share_label">Send to Mac</string>
+    <!-- app_name and share_label come from build.gradle.kts, so the debug build gets its own name. -->
     <string name="tile_label">Clipboard → Mac</string>
+    <string name="widget_clipboard">Clipboard</string>
+    <string name="widget_last">Last file</string>
+    <string name="widget_description">Send the clipboard to your Mac, and open the last file it sent</string>
+    <string name="shortcut_clipboard">Send clipboard</string>
+    <string name="shortcut_files">Send files</string>
+    <string name="shortcut_folder">Received files</string>
+    <string name="shortcut_scan">Scan to pair</string>
 </resources>

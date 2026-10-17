@@ -43,7 +43,7 @@ struct NotchRootView: View {
     @ObservedObject var app: AppModel
 
     private var phase: NotchPhase { ui.phase(for: app.activity) }
-    private let flare: CGFloat = 8
+    private var flare: CGFloat { Self.flare }
     /// Expanded drop box size below the notch; `NotchController` uses it for hit testing.
     static let openSize = CGSize(width: 460, height: 196)
     /// The rounded drop target's inset within the open area below the notch, and its corner radius.
@@ -52,21 +52,29 @@ struct NotchRootView: View {
     static let dropBoxRadius: CGFloat = 20
     /// Extra width on each side of the notch for the transfer sliver's icon and percentage.
     static let miniEar: CGFloat = 46
+    /// The row of recent items under the drop box, when there are any and nothing is being dragged.
+    static let shelfHeight: CGFloat = 74
 
-    private var bodySize: CGSize {
-        let n = ui.notchSize
+    /// The black shape's size, without the flares. `NotchController` hit-tests against the same numbers.
+    static func bodySize(phase: NotchPhase, activity: Activity, notch n: CGSize, showShelf: Bool) -> CGSize {
         switch phase {
         case .collapsed: return n
         case .peek: return CGSize(width: max(n.width + 90, 250), height: n.height + 30)
-        case .open: return CGSize(width: Self.openSize.width, height: n.height + Self.openSize.height)
-        case .mini: return CGSize(width: n.width + Self.miniEar * 2, height: n.height + 9)
+        case .open: return CGSize(width: openSize.width, height: n.height + openSize.height + (showShelf ? shelfHeight : 0))
+        case .mini: return CGSize(width: n.width + miniEar * 2, height: n.height + 9)
         case .activity:
-            switch app.activity {
+            switch activity {
             case .received(let files, _) where !files.isEmpty: return CGSize(width: 420, height: n.height + 150)
             case .incoming: return CGSize(width: 420, height: n.height + 84)
             default: return CGSize(width: 400, height: n.height + 78)
             }
         }
+    }
+
+    static let flare: CGFloat = 8
+
+    private var bodySize: CGSize {
+        Self.bodySize(phase: phase, activity: app.activity, notch: ui.notchSize, showShelf: ui.showShelf)
     }
 
     private var radius: CGFloat {
@@ -108,11 +116,11 @@ struct NotchRootView: View {
             PeekView(name: app.peerName, paired: app.peer != nil)
                 .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .top)))
         case .open:
-            OpenView(app: app, targeted: ui.dropHover, onClick: ui.onClickDropBox)
+            OpenView(app: app, ui: ui, recents: app.recents, targeted: ui.dropHover, onClick: ui.onClickDropBox)
                 .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.2).delay(0.08)),
                                         removal: .opacity.animation(.easeOut(duration: 0.12))))
         case .activity:
-            ActivityView(app: app)
+            ActivityView(app: app, ui: ui)
                 .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
         case .mini:
             MiniTransferView(activity: app.activity, notch: ui.notchSize, ear: Self.miniEar)
@@ -187,6 +195,8 @@ struct PeekView: View {
 
 struct OpenView: View {
     @ObservedObject var app: AppModel
+    @ObservedObject var ui: NotchUIModel
+    @ObservedObject var recents: Recents
     var targeted: Bool
     var onClick: (() -> Void)?
 
@@ -201,24 +211,150 @@ struct OpenView: View {
                     StatusLine(app: app)
                 }
                 Spacer()
+                if !ui.dragActive {
+                    HStack(spacing: 4) {
+                        if app.peer != nil {
+                            IconButton(symbol: "doc.on.clipboard", help: "Send Clipboard") { ui.onAction?(.sendClipboard) }
+                        }
+                        IconButton(symbol: "folder", help: "Open Received Folder") { ui.onAction?(.openFolder) }
+                        IconButton(symbol: "gearshape.fill", help: "Settings") { ui.onAction?(.settings) }
+                    }
+                    .transition(.opacity)
+                }
             }
             .frame(height: 34)
             .padding(.horizontal, 22)
             .padding(.top, 10)
 
             DropBox(title: app.peer == nil ? "Pair a phone from the menu bar first" : "Drop to share to \(app.peerName)",
+                    subtitle: dropSubtitle,
                     targeted: targeted && app.peer != nil)
                 .contentShape(RoundedRectangle(cornerRadius: NotchRootView.dropBoxRadius, style: .continuous))
-                .onTapGesture { onClick?() }
+                .onTapGesture { if !ui.dragActive { onClick?() } }
                 .padding(NotchRootView.dropBoxInsets)
+                .frame(height: NotchRootView.openSize.height)
+
+            if ui.showShelf {
+                RecentShelf(recents: recents, ui: ui)
+                    .padding(.top, NotchRootView.openSize.height - 6)
+                    .transition(.opacity)
+            }
         }
-        .frame(width: NotchRootView.openSize.width, height: NotchRootView.openSize.height, alignment: .top)
+        .frame(width: NotchRootView.openSize.width,
+               height: NotchRootView.openSize.height + (ui.showShelf ? NotchRootView.shelfHeight : 0), alignment: .top)
+    }
+
+    private var dropSubtitle: String {
+        if app.peer != nil, app.isBusy { return "Busy now. Drop to queue it for after." }
+        return ui.dragActive ? "Files · Photos · Folders · Links · Text" : "Or click to choose files"
+    }
+}
+
+/// A small round icon button for the open notch's header.
+struct IconButton: View {
+    var symbol: String
+    var help: String
+    var action: () -> Void
+    @StateObject private var hover = HoverState()
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(hover.on ? 1 : 0.7))
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(Color.white.opacity(hover.on ? 0.18 : 0.08)))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover.on = $0 }
+        .help(help)
+        .animation(.easeOut(duration: 0.12), value: hover.on)
+    }
+}
+
+/// The last few received items. Drag one out to Finder or an app; click to show it (files), open it (links) or copy it.
+/// Double-click a file to open it.
+struct RecentShelf: View {
+    @ObservedObject var recents: Recents
+    @ObservedObject var ui: NotchUIModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Recent").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Palette.dim)
+                Spacer()
+                Button("Clear") { recents.clear() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(0.4))
+            }
+            HStack(spacing: 8) {
+                ForEach(recents.items) { item in
+                    RecentTile(item: item, ui: ui)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.horizontal, 22)
+    }
+}
+
+struct RecentTile: View {
+    var item: RecentItem
+    @ObservedObject var ui: NotchUIModel
+
+    var body: some View {
+        Group {
+            if let url = item.url {
+                Thumbnail(url: url, ui: ui, size: 44, onDoubleClick: { NSWorkspace.shared.open(url) }) {
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                }
+            } else {
+                TextTile(text: item.text ?? "", link: item.link, ui: ui)
+            }
+        }
+        .help(item.url?.lastPathComponent ?? item.text ?? "")
+    }
+}
+
+/// A received text: drag it into any app, click to copy it (or open it, for a link).
+struct TextTile: View {
+    var text: String
+    var link: URL?
+    @ObservedObject var ui: NotchUIModel
+    @StateObject private var hover = HoverState()
+    @StateObject private var copied = HoverState()
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.08))
+            Image(systemName: copied.on ? "checkmark" : (link != nil ? "link" : "text.alignleft"))
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(copied.on ? Palette.ok : Color.white.opacity(0.8))
+        }
+        .frame(width: 44, height: 44)
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(Color.white.opacity(hover.on ? 0.6 : 0.12), lineWidth: 1))
+        .scaleEffect(hover.on ? 1.06 : 1)
+        .animation(.easeOut(duration: 0.12), value: hover.on)
+        .overlay(DragOut(payload: .text(text), image: nil, onClick: click,
+                         onHover: { hover.on = $0 }, onDragging: { ui.draggingOut = $0 }))
+    }
+
+    private func click() {
+        if let link { NSWorkspace.shared.open(link); return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copied.on = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied.on = false }
     }
 }
 
 /// The drop target. Hovering only shifts its colours: a calm tint, nothing moves.
 struct DropBox: View {
     var title: String
+    var subtitle: String
     var targeted: Bool
 
     var body: some View {
@@ -236,7 +372,7 @@ struct DropBox: View {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
-                Text("Files · Photos · Folders · Links · Text")
+                Text(subtitle)
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(targeted ? Palette.accent.opacity(0.9) : Color.white.opacity(0.42))
             }
@@ -247,12 +383,13 @@ struct DropBox: View {
 
 struct ActivityView: View {
     @ObservedObject var app: AppModel
+    @ObservedObject var ui: NotchUIModel
 
     var body: some View {
         VStack(spacing: 10) {
             row
             if case .received(let files, _) = app.activity, !files.isEmpty {
-                ThumbnailStrip(files: files) { app.dismissActivity() }
+                ThumbnailStrip(files: files, ui: ui) { app.dismissActivity() }
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
@@ -303,6 +440,8 @@ struct ActivityView: View {
                 .symbolEffect(.bounce, value: app.activity)
         case .failed:
             Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 24)).foregroundStyle(Palette.bad)
+        case .cancelled:
+            Image(systemName: "xmark.circle.fill").font(.system(size: 26)).foregroundStyle(Palette.dim)
         case .incoming:
             ZStack {
                 PhoneGlyph(color: Palette.accent, size: 26)
@@ -324,19 +463,24 @@ struct ActivityView: View {
         case .received(let files, let texts):
             if files.isEmpty { return texts.count == 1 ? "Copied text from \(name)" : "Received \(texts.count) texts" }
             return "Received \(files.count) file\(files.count == 1 ? "" : "s") from \(name)"
-        case .failed: return "Couldn't send"
+        case .failed: return "Couldn't complete"
+        case .cancelled: return "Transfer cancelled"
         case .incoming: return "\(name) wants to send"
         case .idle: return ""
         }
     }
 
     private var subtitle: String? {
+        let queued = app.queuedCount > 0 ? "\(app.queuedCount) more queued" : nil
         switch app.activity {
-        case .sending(let n, _, _), .receiving(let n, _): return n.isEmpty ? nil : n
+        case .sending(let n, _, _), .receiving(let n, _):
+            let parts = [n.isEmpty ? nil : n, app.speed, queued].compactMap { $0 }
+            return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        case .connecting: return queued
         case .received(let files, let texts):
             if files.isEmpty { return texts.last }
             return files.count == 1 ? files[0].lastPathComponent : "Saved to \(files[0].deletingLastPathComponent().lastPathComponent)"
-        case .failed(let m): return m
+        case .failed(let m), .cancelled(let m): return m
         case .incoming(let summary): return summary
         default: return nil
         }
@@ -368,7 +512,14 @@ struct ActivityView: View {
                 PillButton(title: "Accept", tint: Palette.accent) { app.answerIncoming(true) }
             }
         } else if case .failed = app.activity {
-            PillButton(title: "OK") { app.dismissActivity() }
+            HStack(spacing: 6) {
+                PillButton(title: "OK") { app.dismissActivity() }
+                if let r = app.resumable {
+                    PillButton(title: r.sentAny ? "Resume" : "Retry", tint: Palette.accent) { app.resumeSend() }
+                }
+            }
+        } else if app.activity.isTransferring || app.activity.isConnecting {
+            PillButton(title: "Cancel") { app.cancelTransfer() }
         }
     }
 }
@@ -414,21 +565,21 @@ struct MiniTransferView: View {
     }
 }
 
-/// Received files as thumbnails; clicking one reveals it in Finder.
+/// Received files as thumbnails; drag one out to a folder or app, or click it to reveal it in Finder.
 struct ThumbnailStrip: View {
     var files: [URL]
+    @ObservedObject var ui: NotchUIModel
     var onReveal: () -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(files.prefix(12), id: \.self) { url in
-                    Thumbnail(url: url)
-                        .onTapGesture {
-                            NSWorkspace.shared.activateFileViewerSelecting([url])
-                            onReveal()
-                        }
-                        .help(url.lastPathComponent)
+                    Thumbnail(url: url, ui: ui, onDoubleClick: { NSWorkspace.shared.open(url); onReveal() }) {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                        onReveal()
+                    }
+                    .help(url.lastPathComponent)
                 }
                 if files.count > 12 {
                     Text("+\(files.count - 12)")
@@ -444,6 +595,10 @@ struct ThumbnailStrip: View {
 
 struct Thumbnail: View {
     var url: URL
+    @ObservedObject var ui: NotchUIModel
+    var size: CGFloat = 52
+    var onDoubleClick: (() -> Void)? = nil
+    var onClick: () -> Void
     @StateObject private var loader = ThumbnailLoader()
     @StateObject private var hover = HoverState()
 
@@ -456,13 +611,14 @@ struct Thumbnail: View {
                 Image(nsImage: NSWorkspace.shared.icon(forFile: url.path)).resizable().padding(8)
             }
         }
-        .frame(width: 52, height: 52)
+        .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
             .strokeBorder(Color.white.opacity(hover.on ? 0.6 : 0.12), lineWidth: 1))
         .scaleEffect(hover.on ? 1.06 : 1)
         .animation(.easeOut(duration: 0.12), value: hover.on)
-        .onHover { hover.on = $0 }
+        .overlay(DragOut(payload: .file(url), image: loader.image, onClick: onClick, onDoubleClick: onDoubleClick,
+                         onHover: { hover.on = $0 }, onDragging: { ui.draggingOut = $0 }))
         .onAppear { loader.load(url) }
     }
 }

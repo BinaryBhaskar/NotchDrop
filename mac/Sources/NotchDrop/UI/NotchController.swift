@@ -2,6 +2,9 @@ import AppKit
 import Combine
 import SwiftUI
 
+/// Buttons in the open notch's header.
+enum NotchAction { case sendClipboard, openFolder, settings }
+
 enum NotchPhase: Equatable {
     /// `mini`: a long transfer shrunk to a sliver under the notch with just its progress.
     case collapsed, peek, open, activity, mini
@@ -14,16 +17,25 @@ final class NotchUIModel: ObservableObject {
     @Published var dragActive = false
     @Published var nearNotch = false
     @Published var dropHover = false
-    /// Pointer resting on the notch with "open on hover" enabled.
+    /// Opened by the pointer: resting on the notch with "open on hover" on, or a swipe down on it.
     @Published var hoverOpen = false
     /// Set a moment into a transfer that is still running, so big files don't hold the notch open.
     @Published var transferCompact = false
+    /// Pointer over the shrunk transfer: show the full details (and Cancel) until it moves away.
+    @Published var transferPeek = false
+    /// A recent or received item is being dragged out; the notch holds still until it's dropped.
+    @Published var draggingOut = false
+    /// Any recent items to show under the drop box.
+    @Published var hasRecents = false
+    /// The shelf shows when opened by hover or swipe, not while something is being dragged in.
+    var showShelf: Bool { hasRecents && !dragActive }
     var onClickDropBox: (() -> Void)?
+    var onAction: ((NotchAction) -> Void)?
 
     func phase(for activity: Activity) -> NotchPhase {
         if dragActive && nearNotch { return .open }
         if hoverOpen && activity == .idle { return .open }
-        if transferCompact && activity.isTransferring { return .mini }
+        if transferCompact && activity.isTransferring && !transferPeek { return .mini }
         if activity != .idle { return .activity }
         if dragActive { return .peek }
         return .collapsed
@@ -33,18 +45,26 @@ final class NotchUIModel: ObservableObject {
 /// Owns the transparent panel that sits over the notch and grows into the drop zone.
 @MainActor
 final class NotchController {
-    static let panelSize = CGSize(width: 640, height: 280)
+    static let panelSize = CGSize(width: 640, height: 340)
 
     let ui = NotchUIModel()
     let app: AppModel
     private let prefs = Prefs.shared
     private var panel: NSPanel!
     private var zonePanel: NSPanel?
-    private var hoverMonitors: [Any] = []
+    private var pointerMonitors: [Any] = []
+    /// Fingers' travel down (positive) or up over the notch in the current scroll gesture.
+    private var swipe: CGFloat = 0
+    /// After a swipe up closes it, hovering doesn't reopen it until the pointer has left the notch.
+    private var hoverSuppressed = false
+    private static let swipeThreshold: CGFloat = 25
     private var dropView: DropView!
     private let drag = DragMonitor()
     private var bag = Set<AnyCancellable>()
     private var compactTimer: DispatchWorkItem?
+    /// Mouse-up came while a drop over the box was being accepted: stay open until AppKit delivers it.
+    private var dropPending = false
+    private var dropTimeout: DispatchWorkItem?
     /// How long a transfer shows full details before it shrinks to the progress sliver.
     private static let fullDetailsDuration: TimeInterval = 2.5
 
@@ -59,13 +79,30 @@ final class NotchController {
         }
 
         drag.onDragChanged = { [weak self] active in
-            guard let self, self.prefs.notchEnabled else { return }
-            self.ui.dragActive = active
-            if !active { self.ui.nearNotch = false; self.ui.dropHover = false }
-            if active { self.ui.hoverOpen = false }
+            // Our own drags out of the notch aren't drops coming in.
+            guard let self, self.prefs.notchEnabled, !self.ui.draggingOut else { return }
+            if active {
+                self.dropTimeout?.cancel()
+                self.dropPending = false
+                self.ui.dragActive = true
+                self.ui.hoverOpen = false
+            } else if self.dropView.holdsDrop {
+                // Released over the box. Collapsing now could pull the panel out from under the drop.
+                self.dropPending = true
+                let work = DispatchWorkItem { [weak self] in self?.endDrag() }
+                self.dropTimeout = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
+                return
+            } else {
+                self.endDrag()
+                return
+            }
             self.updateMouseHandling()
         }
-        drag.onMove = { [weak self] p in self?.updateNear(p) }
+        drag.onMove = { [weak self] p in
+            self?.updateNear(p)
+            self?.updateMouseHandling()
+        }
         drag.start()
 
         app.$activity.sink { [weak self] a in
@@ -80,9 +117,16 @@ final class NotchController {
             self.ui.dragActive = false
             self.ui.hoverOpen = false
         }.store(in: &bag)
-        prefs.$openOnHover.sink { [weak self] on in
-            DispatchQueue.main.async { self?.setHoverTracking(on) }
+        prefs.$openOnHover.sink { [weak self] _ in
+            DispatchQueue.main.async { self?.updatePointer() }
         }.store(in: &bag)
+        app.recents.$items.sink { [weak self] items in
+            self?.ui.hasRecents = !items.isEmpty
+        }.store(in: &bag)
+        ui.$draggingOut.dropFirst().sink { [weak self] _ in
+            DispatchQueue.main.async { self?.updatePointer() }
+        }.store(in: &bag)
+        startPointerMonitors()
         prefs.$previewZone.combineLatest(prefs.$zoneWidth, prefs.$zoneHeight).sink { [weak self] show, w, h in
             self?.showZone(show ? CGSize(width: w, height: h) : nil)
         }.store(in: &bag)
@@ -97,11 +141,22 @@ final class NotchController {
         }
     }
 
+    private func endDrag() {
+        dropTimeout?.cancel()
+        dropTimeout = nil
+        dropPending = false
+        ui.dragActive = false
+        ui.nearNotch = false
+        ui.dropHover = false
+        updateMouseHandling()
+    }
+
     // MARK: Transfer sliver
 
     /// Shows a transfer in full first, then shrinks it if it is still running; completion expands it again.
     private func updateCompact(transferring: Bool) {
         if !transferring {
+            ui.transferPeek = false
             compactTimer?.cancel()
             compactTimer = nil
             if ui.transferCompact { ui.transferCompact = false }
@@ -116,6 +171,22 @@ final class NotchController {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.fullDetailsDuration, execute: work)
     }
 
+    /// Hovering the sliver brings back the full view.
+    private func updateTransferPeek() {
+        guard ui.transferCompact, app.activity.isTransferring else { return }
+        let p = NSEvent.mouseLocation
+        let f = panel.frame
+        let n = ui.notchSize
+        // Opens over the sliver; closes once the pointer leaves the (larger) full view, so it doesn't flicker.
+        let w = ui.transferPeek ? 400 + 32 : n.width + NotchRootView.miniEar * 2 + 16
+        let h = ui.transferPeek ? n.height + 78 + 12 : n.height + 9 + 8
+        let peek = NSRect(x: f.midX - w / 2, y: f.maxY - h, width: w, height: h).contains(p)
+        if peek != ui.transferPeek {
+            ui.transferPeek = peek
+            updateMouseHandling()
+        }
+    }
+
     // MARK: Activation zone
 
     /// The area around the notch where a drag makes the drop box expand.
@@ -125,12 +196,16 @@ final class NotchController {
         return NSRect(x: f.midX - w / 2, y: f.maxY - h, width: w, height: h)
     }
 
-    /// The expanded notch on screen, matching `NotchRootView`'s open size.
-    private var openBox: NSRect {
+    /// The black shape on screen in a given phase, flares included, from the same sizes `NotchRootView` draws.
+    private func shapeRect(_ phase: NotchPhase) -> NSRect {
         let f = panel.frame
-        let w = NotchRootView.openSize.width + 16, h = ui.notchSize.height + NotchRootView.openSize.height
-        return NSRect(x: f.midX - w / 2, y: f.maxY - h, width: w, height: h)
+        let size = NotchRootView.bodySize(phase: phase, activity: app.activity, notch: ui.notchSize, showShelf: ui.showShelf)
+        let w = size.width + NotchRootView.flare * 2
+        return NSRect(x: f.midX - w / 2, y: f.maxY - size.height, width: w, height: size.height)
     }
+
+    /// The expanded notch on screen.
+    private var openBox: NSRect { shapeRect(.open) }
 
     /// The rounded drop target inside the open notch: the only place a drop is accepted.
     private var dropTarget: NSBezierPath {
@@ -168,36 +243,82 @@ final class NotchController {
         zonePanel?.orderFrontRegardless()
     }
 
-    // MARK: Open on hover
+    // MARK: Open by hover or swipe
 
-    private func setHoverTracking(_ on: Bool) {
-        hoverMonitors.forEach(NSEvent.removeMonitor)
-        hoverMonitors = []
-        ui.hoverOpen = false
-        updateMouseHandling()
-        guard on else { return }
-        panel.acceptsMouseMovedEvents = true
-        if let m = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved, handler: { [weak self] _ in
-            MainActor.assumeIsolated { self?.updateHover() }
-        }) { hoverMonitors.append(m) }
-        if let m = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved, handler: { [weak self] e in
-            MainActor.assumeIsolated { self?.updateHover() }
+    /// The pointer and scroll gestures are watched all the time: they open the notch (hover or swipe down),
+    /// peek at a shrunk transfer, and hold a finished transfer on screen while the pointer is over it.
+    private func startPointerMonitors() {
+        let moved: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged]
+        if let m = NSEvent.addGlobalMonitorForEvents(matching: moved, handler: { [weak self] _ in
+            MainActor.assumeIsolated { self?.updatePointer() }
+        }) { pointerMonitors.append(m) }
+        if let m = NSEvent.addLocalMonitorForEvents(matching: moved, handler: { [weak self] e in
+            MainActor.assumeIsolated { self?.updatePointer() }
             return e
-        }) { hoverMonitors.append(m) }
+        }) { pointerMonitors.append(m) }
+        if let m = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel, handler: { [weak self] e in
+            MainActor.assumeIsolated { self?.handleScroll(e) }
+        }) { pointerMonitors.append(m) }
+        if let m = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel, handler: { [weak self] e in
+            MainActor.assumeIsolated { self?.handleScroll(e) }
+            return e
+        }) { pointerMonitors.append(m) }
     }
 
-    private func updateHover() {
-        guard prefs.notchEnabled, !ui.dragActive else { return }
-        let p = NSEvent.mouseLocation
+    private var hotspot: NSRect {
         let f = panel.frame
         let n = ui.notchSize
-        let hotspot = NSRect(x: f.midX - n.width / 2, y: f.maxY - n.height, width: n.width, height: n.height)
+        return NSRect(x: f.midX - n.width / 2, y: f.maxY - n.height, width: n.width, height: n.height)
+    }
+
+    /// The finished-transfer box on screen.
+    private var activityBox: NSRect { shapeRect(.activity).insetBy(dx: -8, dy: -8) }
+
+    private func updatePointer() {
+        defer { updateMouseHandling() }
+        updateTransferPeek()
+        let p = NSEvent.mouseLocation
+        // A finished transfer stays up while the pointer is on it (or one of its files is being dragged out).
+        let finished = app.activity != .idle && !app.activity.isTransferring
+        app.holdActivity = ui.draggingOut || (finished && activityBox.contains(p))
+
+        guard prefs.notchEnabled, !ui.dragActive, !ui.draggingOut else { return }
+        if hoverSuppressed, !openBox.contains(p) { hoverSuppressed = false }
         // Opens on the notch itself; stays open while the pointer is over the expanded box.
-        let open = ui.hoverOpen ? openBox.contains(p) : hotspot.contains(p)
-        if open != ui.hoverOpen {
-            ui.hoverOpen = open
-            if open { prefs.haptic() }
-            updateMouseHandling()
+        let open = ui.hoverOpen
+            ? openBox.insetBy(dx: -8, dy: -8).contains(p)
+            : prefs.openOnHover && !hoverSuppressed && app.activity == .idle && hotspot.contains(p)
+        setPointerOpen(open)
+    }
+
+    private func setPointerOpen(_ open: Bool) {
+        guard open != ui.hoverOpen else { return }
+        ui.hoverOpen = open
+        if open {
+            prefs.haptic()
+            app.recents.prune()
+        }
+        updateMouseHandling()
+    }
+
+    /// A two-finger swipe down over the notch opens it; a swipe up closes it.
+    private func handleScroll(_ e: NSEvent) {
+        guard prefs.notchEnabled, !ui.dragActive, !ui.draggingOut, e.momentumPhase.isEmpty else { return }
+        if e.phase == .began { swipe = 0 }
+        let p = NSEvent.mouseLocation
+        let area = hotspot.insetBy(dx: -80, dy: 0)
+        guard ui.hoverOpen || prefs.swipeToOpen else { return }
+        guard ui.hoverOpen ? openBox.contains(p) : area.contains(p) else { swipe = 0; return }
+        // Content follows the fingers with natural scrolling, so undo that to get the fingers' direction.
+        let raw = e.hasPreciseScrollingDeltas ? e.scrollingDeltaY : e.scrollingDeltaY * 10
+        swipe += e.isDirectionInvertedFromDevice ? raw : -raw
+        if !ui.hoverOpen, swipe > Self.swipeThreshold, app.activity == .idle {
+            swipe = 0
+            setPointerOpen(true)
+        } else if ui.hoverOpen, swipe < -Self.swipeThreshold {
+            swipe = 0
+            hoverSuppressed = true
+            setPointerOpen(false)
         }
     }
 
@@ -210,6 +331,7 @@ final class NotchController {
         p.level = .statusBar
         p.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
         p.isMovable = false
+        p.acceptsMouseMovedEvents = true
         p.ignoresMouseEvents = true
         p.hidesOnDeactivate = false
 
@@ -227,18 +349,33 @@ final class NotchController {
         dv.onMove = { [weak self] p in self?.updateNear(p) }
         dv.canAccept = { [weak self] p in
             guard let self else { return false }
-            return self.inDropTarget(p) && self.app.peer != nil && !self.app.isBusy
+            // While busy the drop is queued, so it's still taken.
+            return self.inDropTarget(p) && self.app.peer != nil
         }
         dv.onDrop = { [weak self] urls, texts in
             guard let self else { return }
             self.prefs.haptic(.levelChange)
-            self.ui.dropHover = false
-            self.ui.dragActive = false
+            self.endDrag()
             self.app.send(urls: urls, texts: texts)
+        }
+        dv.onSessionEnd = { [weak self] in
+            guard let self, self.dropPending else { return }
+            self.endDrag()
         }
         ui.onClickDropBox = { [weak self] in
             self?.ui.hoverOpen = false
             AppDelegate.shared?.sendFiles()
+        }
+        ui.onAction = { [weak self] action in
+            guard let self else { return }
+            self.ui.hoverOpen = false
+            self.hoverSuppressed = true
+            self.updateMouseHandling()
+            switch action {
+            case .sendClipboard: self.app.sendClipboard()
+            case .openFolder: AppDelegate.shared?.openReceivedFolder()
+            case .settings: AppDelegate.shared?.showSettings()
+            }
         }
         dropView = dv
         p.contentView = dv
@@ -276,18 +413,25 @@ final class NotchController {
         if over != ui.dropHover { ui.dropHover = over }
     }
 
+    /// The panel is much bigger than what's drawn in it, so it only takes the mouse while the pointer is
+    /// over the visible notch. Otherwise its transparent area would swallow clicks, and drags meant for
+    /// windows underneath (Finder to Finder, say).
     private func updateMouseHandling() {
+        let p = NSEvent.mouseLocation
+        let phase = ui.phase(for: app.activity)
         let interactive: Bool
-        switch ui.phase(for: app.activity) {
-        case .open, .peek: interactive = true
-        case .activity:
-            switch app.activity {
-            case .received, .failed, .incoming: interactive = true
-            default: interactive = false
+        if dropPending {
+            interactive = true
+        } else if ui.dragActive {
+            // Only the open drop box takes part in a drag; the zone itself is tracked from the pointer.
+            interactive = phase == .open && openBox.contains(p)
+        } else {
+            switch phase {
+            case .open, .activity: interactive = shapeRect(phase).insetBy(dx: -4, dy: -4).contains(p)
+            case .peek, .collapsed, .mini: interactive = false
             }
-        case .collapsed, .mini: interactive = false
         }
-        panel.ignoresMouseEvents = !(interactive || ui.dragActive)
+        if panel.ignoresMouseEvents == interactive { panel.ignoresMouseEvents = !interactive }
     }
 }
 
@@ -316,7 +460,10 @@ struct ZoneOverlay: View {
 
 // MARK: - Drag detection
 
-/// Detects system-wide drags by watching the drag pasteboard while the mouse button is held.
+/// Detects system-wide drags by watching the drag pasteboard while the left button is held.
+///
+/// It polls rather than relying on mouse-dragged events alone: once another app's drag session starts,
+/// those events don't always reach a global monitor, which used to leave a drag unnoticed.
 final class DragMonitor {
     var onDragChanged: ((Bool) -> Void)?
     var onMove: ((NSPoint) -> Void)?
@@ -325,6 +472,8 @@ final class DragMonitor {
     private var baseline = NSPasteboard(name: .drag).changeCount
     private var dragging = false
     private var poll: Timer?
+    /// Polls in a row that saw the button up. One isn't enough: a trackpad's three-finger drag can blip.
+    private var upTicks = 0
 
     func start() {
         let m = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] e in
@@ -337,33 +486,52 @@ final class DragMonitor {
         switch e.type {
         case .leftMouseDown:
             baseline = NSPasteboard(name: .drag).changeCount
+            startPolling()
         case .leftMouseDragged:
-            if !dragging && NSPasteboard(name: .drag).changeCount != baseline {
-                setDragging(true)
-            }
-            if dragging { onMove?(NSEvent.mouseLocation) }
+            if poll == nil { startPolling() }
+            check()
         case .leftMouseUp:
-            if dragging { setDragging(false) }
+            finish()
         default:
             break
         }
     }
 
+    private static var buttonDown: Bool {
+        NSEvent.pressedMouseButtons & 1 != 0 || CGEventSource.buttonState(.combinedSessionState, button: .left)
+    }
+
+    private func startPolling() {
+        poll?.invalidate()
+        upTicks = 0
+        let t = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.check() }
+        // .common, so it keeps firing while menus or our own windows track the mouse.
+        RunLoop.main.add(t, forMode: .common)
+        poll = t
+    }
+
+    private func check() {
+        guard Self.buttonDown else {
+            upTicks += 1
+            if upTicks >= 2 { finish() }
+            return
+        }
+        upTicks = 0
+        if !dragging, NSPasteboard(name: .drag).changeCount != baseline { setDragging(true) }
+        if dragging { onMove?(NSEvent.mouseLocation) }
+    }
+
+    private func finish() {
+        poll?.invalidate()
+        poll = nil
+        upTicks = 0
+        baseline = NSPasteboard(name: .drag).changeCount
+        if dragging { setDragging(false) }
+    }
+
     private func setDragging(_ d: Bool) {
         dragging = d
         onDragChanged?(d)
-        poll?.invalidate()
-        guard d else { return }
-        // Mouse-up can be swallowed when the drop lands on our own panel; poll the button state as a fallback.
-        poll = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            if NSEvent.pressedMouseButtons & 1 == 0 {
-                self.baseline = NSPasteboard(name: .drag).changeCount
-                self.setDragging(false)
-            } else {
-                self.onMove?(NSEvent.mouseLocation)
-            }
-        }
     }
 }
 
@@ -376,6 +544,11 @@ final class DropView: NSView {
     var canAccept: ((NSPoint) -> Bool)?
     /// Pointer position in screen coordinates while a drag is over the panel.
     var onMove: ((NSPoint) -> Void)?
+    /// The drag that was over the view has gone: dropped, cancelled or moved away.
+    var onSessionEnd: (() -> Void)?
+    /// A drag is over the view and would be taken if released now.
+    var holdsDrop: Bool { inside && lastAccepted }
+    private var inside = false
 
     private let promiseQueue: OperationQueue = {
         let q = OperationQueue()
@@ -391,6 +564,7 @@ final class DropView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        inside = true
         onHover?(true)
         report(sender)
         return accepts(sender) ? .copy : []
@@ -406,7 +580,8 @@ final class DropView: NSView {
     private var lastAccepted = false
 
     private func accepts(_ sender: NSDraggingInfo) -> Bool {
-        guard let window else { return false }
+        // A source in this app means one of our own tiles, which would only send the file straight back.
+        guard let window, sender.draggingSource == nil else { return false }
         lastAccepted = canAccept?(window.convertPoint(toScreen: sender.draggingLocation)) == true
         return lastAccepted
     }
@@ -418,7 +593,15 @@ final class DropView: NSView {
 
     override func draggingExited(_ sender: NSDraggingInfo?) {
         onHover?(false)
+        inside = false
         lastAccepted = false
+        onSessionEnd?()
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        inside = false
+        lastAccepted = false
+        onSessionEnd?()
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
@@ -458,5 +641,7 @@ final class DropView: NSView {
 
     override func concludeDragOperation(_ sender: NSDraggingInfo?) {
         onHover?(false)
+        inside = false
+        onSessionEnd?()
     }
 }

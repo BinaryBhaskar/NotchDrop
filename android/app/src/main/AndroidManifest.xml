@@ -11,10 +11,17 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.CAMERA" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <!-- To check that a Files app can show the save folder before offering it. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="vnd.android.document/directory" />
+        </intent>
+    </queries>
 
     <application
         android:name=".NotchDropApp"
@@ -52,7 +59,7 @@
             android:exported="true"
             android:excludeFromRecents="true"
             android:label="@string/share_label"
-            android:taskAffinity="com.amurot.notchdrop.share"
+            android:taskAffinity="${applicationId}.share"
             android:theme="@style/Theme.NotchDrop.Sheet">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
@@ -95,7 +102,23 @@
         </receiver>
 
         <receiver
+            android:name=".service.Widget"
+            android:exported="false"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info" />
+        </receiver>
+
+        <receiver
             android:name=".service.CopyReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".service.CancelReceiver"
             android:exported="false" />
     </application>
 </manifest>

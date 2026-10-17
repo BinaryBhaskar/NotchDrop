@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/shortcut_received" />
+    <foreground>
+        <inset android:drawable="@drawable/ic_arrow_down_outlined" android:inset="34%" />
+    </foreground>
+</adaptive-icon>

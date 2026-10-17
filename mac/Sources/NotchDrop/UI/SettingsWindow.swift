@@ -150,6 +150,16 @@ struct GeneralPane: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
+            Section {
+                LabeledContent("Share menu and Services") {
+                    Button("Open Extensions Settings…") {
+                        let id = "com.apple.ExtensionsPreferences?extensionPointIdentifier=com.apple.share-services"
+                        if let url = URL(string: "x-apple.systempreferences:\(id)") { NSWorkspace.shared.open(url) }
+                    }
+                }
+            } footer: {
+                Text("Choose NotchDrop from the Share button in Finder, Photos, Safari and other apps, or from Services in the right-click menu. If it isn't listed, turn it on in Extensions settings.")
+            }
             Section("Feedback") {
                 Toggle("Play sounds", isOn: $prefs.sounds)
                 Toggle("Haptic feedback on the trackpad", isOn: $prefs.haptics)
@@ -217,6 +227,11 @@ struct NotchPane: View {
                 Toggle("Open when the pointer rests on the notch", isOn: $prefs.openOnHover)
             } footer: {
                 Text("Off: the notch only opens while you're dragging something. On: hovering opens it too, and clicking the box lets you pick files.")
+            }
+            Section {
+                Toggle("Swipe down on the notch to open it", isOn: $prefs.swipeToOpen)
+            } footer: {
+                Text("With the pointer at the notch, scroll or swipe down with two fingers to open it, and up to close it.")
             }
             Section {
                 ZonePreview(width: prefs.zoneWidth, height: prefs.zoneHeight)
@@ -416,6 +431,14 @@ struct ReceivingPane: View {
                 Toggle("Copy received text to the clipboard", isOn: $prefs.copyText)
                 Toggle("Open received links in the browser", isOn: $prefs.openLinks)
             }
+            Section {
+                Toggle("Show a notification for received items", isOn: $prefs.notify)
+                    .disabled(!prefs.notchEnabled)
+            } footer: {
+                Text(prefs.notchEnabled
+                     ? "With Show in Finder and Open for files, Copy and Open Link for text."
+                     : "Always on while the notch is turned off, since nothing else would show what arrived.")
+            }
         }
     }
 
@@ -510,6 +533,15 @@ struct AboutPane: View {
             Link("github.com/BinaryBhaskar/NotchDrop", destination: URL(string: "https://github.com/BinaryBhaskar/NotchDrop")!)
             Text("MIT License").font(.caption).foregroundStyle(.tertiary)
             Spacer()
+            Link(destination: URL(string: "https://amurot.com")!) {
+                HStack(spacing: 8) {
+                    AmurotLogo().frame(width: 18, height: 18)
+                    Text("Created by **Amurot**")
+                }
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("amurot.com")
         }
         .frame(maxWidth: .infinity)
         .padding()
