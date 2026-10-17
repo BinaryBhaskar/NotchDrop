@@ -21,8 +21,8 @@ android {
         minSdk = 29
         // Play requires 36 for new apps and updates. Stay below 37, where Android 17's local-network permission applies.
         targetSdk = 36
-        versionCode = 5
-        versionName = "1.2.1"
+        versionCode = 6
+        versionName = "1.3.0"
         // 64-bit ARM covers modern phones and Apple-silicon emulators; keeps ML Kit's native libs small.
         ndk { abiFilters += "arm64-v8a" }
     }
