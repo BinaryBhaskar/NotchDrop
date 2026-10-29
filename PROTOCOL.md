@@ -83,6 +83,39 @@ Kept files survive a restart:
 
 At startup each app deletes leftover partial files that the kept batch doesn't need.
 
+## Streams (camera and screen)
+
+The phone always dials the Mac, on a normal session. The Mac asks with `stream_request {kind:"camera"|"screen"}`; the phone answers `stream_ack {ok, message?}`, where `message` says a tap is still needed on the phone (Android's screen-capture prompt, or a notification when it couldn't open by itself). The phone then opens a **new** session and sends:
+
+```
+stream {kind, w, h, rotation, quality, fps, control, lens?, lenses?, zoom?, zoomMin?, zoomMax?, torch?, hasTorch?}
+```
+
+After that, chunks (`0x02`) are H.264 access units: `flags` (1 byte: `1` key frame, `2` SPS/PPS config) + presentation time in µs (8 bytes, big endian) + Annex-B data. Neither side times out the socket while a stream is open. When its send queue backs up, the phone drops frames up to the next key frame.
+
+Phone → Mac JSON: `format {…same keys as stream, message?}` when the size, rotation, lens or control state changes; `bye`.
+
+Mac → phone JSON:
+- `keyframe`; `quality {quality:"720p"|"1080p"|"1440p"|"4k", fps}`; `bye`.
+- Camera: `cam {lens?, zoom?, torch?}`, `shutter` (the phone takes a full-resolution photo and sends it as a normal transfer).
+- Screen: `input {a:"down"|"move"|"up", x, y}` (0–1 from the top left), `input {a:"scroll", x, y, dx, dy}`, `input {a:"key", code? | text?}`. Codes: `back home recents notifications enter backspace delete left right up down tab selectAll copy cut`.
+
+Either side may also send `stream_stop {kind}` on a regular session. The Mac re-serves the camera on `127.0.0.1:47830` as MPEG-TS for OBS.
+
+## Pointer and keyboard (Universal Control style)
+
+On a regular session the Mac sends `input` messages that drive a cursor drawn by the phone's accessibility service:
+
+```
+input {a:"enter", edge:"left"|"right"|"top"|"bottom", pos}   phone edge the pointer comes in through, pos 0–1 along it
+input {a:"rel", dx, dy}                                       Mac points
+input {a:"press"} / {a:"release"} / {a:"scroll", dx, dy} / {a:"key", …} / {a:"leave"}
+```
+
+When the cursor crosses back over the entry edge, the phone replies `input_exit {pos, message?}` and the Mac takes the pointer back at that spot. If Phone control is off, the phone answers `enter` straight away with `input_exit` and a `message`. While controlling, the Mac sends `input {a:"alive"}` every second and the phone answers `{t:"alive"}`. If the Mac hears nothing for 3.5 s (Wi-Fi dropped, app killed) it takes the pointer back by itself; if the phone hears nothing for 4 s it lifts any held touch and hides its cursor. The Mac also gives the pointer back when it sleeps, locks or quits.
+
+The Mac only starts a session when the pointer is pushed out along the stretch of edge where the user placed the phone (Settings → Phone → Arrangement: a display, an edge and a 0–1 offset of the phone's centre along it). `pos` is measured along that stretch, so the cursor comes back where it left.
+
 ## Reaching the other device
 
 A connection attempt races all known candidates in parallel and keeps the first that authenticates. Candidates come from:

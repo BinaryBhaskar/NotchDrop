@@ -26,9 +26,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settings.onPair = { [weak self] in self?.pairWindow.show() }
         historyWindow = HistoryWindowController(app: app)
         Notifier.shared.start()
+        UniversalControl.shared.start()
 
-        Hotkey.shared.onPress = { [weak self] in self?.app.sendSelection() }
-        prefs.$shortcut.sink { Hotkey.shared.register($0) }.store(in: &bag)
+        Hotkey.shared.onPress = { [weak self] action in
+            switch action {
+            case .sendSelection: self?.app.sendSelection()
+            case .openNotch: self?.notch.toggleOnPointerScreen()
+            }
+        }
+        prefs.$shortcut.sink { Hotkey.shared.register($0, for: .sendSelection) }.store(in: &bag)
+        prefs.$openShortcut.sink { Hotkey.shared.register($0, for: .openNotch) }.store(in: &bag)
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         let menu = NSMenu()
@@ -53,6 +60,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { Updater.shared.start() }
     }
 
+    /// Hand the pointer back before quitting, so it's never left hidden and detached.
+    func applicationWillTerminate(_ notification: Notification) {
+        UniversalControl.shared.stop()
+    }
+
     /// Opening the app again (Spotlight, Finder, Dock) while it's running brings up Settings.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         settings.show()
@@ -60,8 +72,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls where url.scheme == "notchdrop" && url.host == "share" {
-            app.sendShared()
+        for url in urls where url.scheme == "notchdrop" {
+            switch url.host {
+            case "share": app.sendShared()
+            // For the Shortcuts app ("Open URL") or anything else that can open a link.
+            case "open": notch?.toggleOnPointerScreen()
+            default: break
+            }
         }
     }
 
@@ -110,6 +127,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(item("Open Received Folder", #selector(openFolder), ""))
             menu.addItem(item("History…", #selector(openHistory), "y"))
             menu.addItem(.separator())
+            let cam = item("Phone Camera", #selector(phoneCamera), "")
+            cam.state = app.liveStreams.contains(.camera) ? .on : .off
+            menu.addItem(cam)
+            let scr = item("Phone Screen", #selector(phoneScreen), "")
+            scr.state = app.liveStreams.contains(.screen) ? .on : .off
+            menu.addItem(scr)
+            menu.addItem(item("Phone Desktop (DeX-style)…", #selector(phoneDesktop), ""))
+            let control = item("Move Pointer to Phone", #selector(toggleControl), "")
+            control.state = prefs.controlEnabled ? .on : .off
+            menu.addItem(control)
+            menu.addItem(.separator())
             menu.addItem(item("Rename \(peer.displayName)…", #selector(renamePeer), ""))
             menu.addItem(item("Pair a Different Phone…", #selector(pair), ""))
             menu.addItem(item("Unpair \(peer.displayName)", #selector(unpair), ""))
@@ -121,6 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(item("Rename This Mac…", #selector(renameMac), ""))
         menu.addItem(item("Settings…", #selector(openSettings), ","))
+        menu.addItem(item("Setup Guide…", #selector(openGuide), ""))
         menu.addItem(item("Check for Updates…", #selector(checkForUpdates), ""))
         menu.addItem(.separator())
         menu.addItem(item("Quit NotchDrop", #selector(quit), "q"))
@@ -140,6 +169,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func openHistory() { historyWindow.show() }
+
+    @objc func phoneCamera() { app.requestStream(.camera) }
+    @objc func phoneScreen() { app.requestStream(.screen) }
+    @objc func phoneDesktop() { DesktopWindow.shared.show() }
+
+    @objc func toggleControl() {
+        prefs.controlEnabled.toggle()
+        if prefs.controlEnabled, !SelectionGrabber.accessibilityTrusted { SelectionGrabber.openAccessibilitySettings() }
+    }
 
     @objc func sendFiles() {
         guard app.peer != nil else { pairWindow.show(); return }
@@ -203,6 +241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openSettings() { settings.show() }
+    @objc private func openGuide() { settings.show(.guide) }
 
     @objc private func checkForUpdates() { Updater.shared.check(manual: true) }
 

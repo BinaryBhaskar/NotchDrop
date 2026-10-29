@@ -14,6 +14,8 @@ enum NotchPhase: Equatable {
 final class NotchUIModel: ObservableObject {
     @Published var notchSize = CGSize(width: 185, height: 32)
     @Published var hasNotch = true
+    /// "Hide notch": nothing is drawn while it rests, only when it opens.
+    @Published var hidden = false
     @Published var dragActive = false
     @Published var nearNotch = false
     @Published var dropHover = false
@@ -65,6 +67,12 @@ final class NotchController {
     /// Mouse-up came while a drop over the box was being accepted: stay open until AppKit delivers it.
     private var dropPending = false
     private var dropTimeout: DispatchWorkItem?
+    /// Opened by the shortcut: stays open until the pointer has been in it and left, a click lands
+    /// elsewhere, or the shortcut is pressed again.
+    private var pinned = false
+    private var pinnedEntered = false
+    /// The display the panel is on, when it isn't the home one (the notched or main display).
+    private var awayScreen: NSScreen?
     /// How long a transfer shows full details before it shrinks to the progress sliver.
     private static let fullDetailsDuration: TimeInterval = 2.5
 
@@ -82,6 +90,7 @@ final class NotchController {
             // Our own drags out of the notch aren't drops coming in.
             guard let self, self.prefs.notchEnabled, !self.ui.draggingOut else { return }
             if active {
+                if self.prefs.followPointer { self.moveToPointerScreen() }
                 self.dropTimeout?.cancel()
                 self.dropPending = false
                 self.ui.dragActive = true
@@ -108,7 +117,10 @@ final class NotchController {
         app.$activity.sink { [weak self] a in
             guard let self else { return }
             self.updateCompact(transferring: a.isTransferring)
-            DispatchQueue.main.async { self.updateMouseHandling() }
+            DispatchQueue.main.async {
+                self.updateMouseHandling()
+                self.returnHomeWhenIdle()
+            }
         }.store(in: &bag)
 
         prefs.$notchEnabled.sink { [weak self] on in
@@ -116,6 +128,11 @@ final class NotchController {
             if on { self.panel.orderFrontRegardless() } else { self.panel.orderOut(nil) }
             self.ui.dragActive = false
             self.ui.hoverOpen = false
+        }.store(in: &bag)
+        prefs.$hideNotch.sink { [weak self] hide in
+            self?.ui.hidden = hide
+            // Leaves the notch out of screenshots, screen recordings and screen sharing.
+            self?.panel.sharingType = hide ? .none : .readOnly
         }.store(in: &bag)
         prefs.$openOnHover.sink { [weak self] _ in
             DispatchQueue.main.async { self?.updatePointer() }
@@ -149,6 +166,50 @@ final class NotchController {
         ui.nearNotch = false
         ui.dropHover = false
         updateMouseHandling()
+        returnHomeWhenIdle()
+    }
+
+    // MARK: Other displays
+
+    private var homeScreen: NSScreen? {
+        NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) ?? NSScreen.main
+    }
+
+    private var pointerScreen: NSScreen? {
+        let p = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(p, $0.frame, false) }
+    }
+
+    /// The open-notch shortcut: opens on the display the pointer is on, or closes it if it's open.
+    func toggleOnPointerScreen() {
+        guard prefs.notchEnabled, !ui.dragActive, !ui.draggingOut else { return }
+        if ui.hoverOpen {
+            hoverSuppressed = openBox.contains(NSEvent.mouseLocation)
+            setPointerOpen(false)
+            return
+        }
+        guard app.activity == .idle else { return }
+        moveToPointerScreen()
+        pinned = true
+        pinnedEntered = openBox.contains(NSEvent.mouseLocation)
+        setPointerOpen(true)
+    }
+
+    private func moveToPointerScreen() {
+        guard let screen = pointerScreen, screen != (awayScreen ?? homeScreen) else { return }
+        awayScreen = screen == homeScreen ? nil : screen
+        layout()
+    }
+
+    /// Once the notch has closed on another display, it goes back to the built-in one.
+    private func returnHomeWhenIdle() {
+        guard awayScreen != nil else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self, self.awayScreen != nil, !self.dropPending, !self.ui.draggingOut,
+                  self.ui.phase(for: self.app.activity) == .collapsed else { return }
+            self.awayScreen = nil
+            self.layout()
+        }
     }
 
     // MARK: Transfer sliver
@@ -256,6 +317,13 @@ final class NotchController {
             MainActor.assumeIsolated { self?.updatePointer() }
             return e
         }) { pointerMonitors.append(m) }
+        // A click anywhere else closes a notch the shortcut opened.
+        if let m = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.pinned, self.ui.hoverOpen, !self.openBox.contains(NSEvent.mouseLocation) else { return }
+                self.setPointerOpen(false)
+            }
+        }) { pointerMonitors.append(m) }
         if let m = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel, handler: { [weak self] e in
             MainActor.assumeIsolated { self?.handleScroll(e) }
         }) { pointerMonitors.append(m) }
@@ -284,9 +352,15 @@ final class NotchController {
 
         guard prefs.notchEnabled, !ui.dragActive, !ui.draggingOut else { return }
         if hoverSuppressed, !openBox.contains(p) { hoverSuppressed = false }
+        let inBox = openBox.insetBy(dx: -8, dy: -8).contains(p)
+        if pinned && ui.hoverOpen {
+            // Opened by the shortcut away from the notch: wait for the pointer to come in before leaving closes it.
+            if inBox { pinnedEntered = true }
+            if !pinnedEntered { return }
+        }
         // Opens on the notch itself; stays open while the pointer is over the expanded box.
         let open = ui.hoverOpen
-            ? openBox.insetBy(dx: -8, dy: -8).contains(p)
+            ? inBox
             : prefs.openOnHover && !hoverSuppressed && app.activity == .idle && hotspot.contains(p)
         setPointerOpen(open)
     }
@@ -297,6 +371,9 @@ final class NotchController {
         if open {
             prefs.haptic()
             app.recents.prune()
+        } else {
+            pinned = false
+            returnHomeWhenIdle()
         }
         updateMouseHandling()
     }
@@ -383,9 +460,11 @@ final class NotchController {
         panel = p
     }
 
-    /// Positions the panel at the top-center of the notched (built-in) screen, or the main screen.
+    /// Positions the panel at the top-center of the notched (built-in) screen, or the main screen,
+    /// or of another display while it's open there.
     func layout() {
-        guard let screen = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) ?? NSScreen.main else { return }
+        if let away = awayScreen, !NSScreen.screens.contains(away) { awayScreen = nil }
+        guard let screen = awayScreen ?? homeScreen else { return }
         let f = screen.frame
         if screen.safeAreaInsets.top > 0,
            let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea

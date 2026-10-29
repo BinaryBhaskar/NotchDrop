@@ -15,11 +15,14 @@ protocol SessionDelegate: AnyObject {
     func incomingFailed(_ error: Error)
     /// Asked before each incoming offer is accepted.
     func shouldAccept(offer: [String: Any]) async -> Bool
+    /// The phone opened a video stream; returns when it ends. The channel belongs to the stream from here on.
+    func streamOpened(_ info: [String: Any], channel: SecureChannel) async
 }
 
 extension SessionDelegate {
     func shouldAccept(offer: [String: Any]) async -> Bool { true }
     func incomingStarted(_ control: TransferControl) {}
+    func streamOpened(_ info: [String: Any], channel: SecureChannel) async {}
 }
 
 final class ProtocolServer: @unchecked Sendable {
@@ -126,6 +129,9 @@ final class ProtocolServer: @unchecked Sendable {
                     d.incomingFinished(batch)
                 case "ping":
                     try await ch.send(json: ["t": "pong"])
+                case "stream":
+                    await d.streamOpened(msg, channel: ch)
+                    break loop
                 default:
                     break
                 }

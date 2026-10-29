@@ -114,6 +114,9 @@ object NdIcons {
     val Send @Composable get() = res(R.drawable.ic_send_outlined)
     val Sweep @Composable get() = res(R.drawable.ic_sweep_outlined)
     val Amurot @Composable get() = res(R.drawable.ic_amurot_logo)
+    val Camera @Composable get() = res(R.drawable.ic_camera_outlined)
+    val Cast @Composable get() = res(R.drawable.ic_cast_outlined)
+    val Pointer @Composable get() = res(R.drawable.ic_pointer_outlined)
 }
 
 object NdSprings {

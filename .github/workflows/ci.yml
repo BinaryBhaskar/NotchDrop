@@ -39,9 +39,9 @@ jobs:
 
       - name: Android — unit tests (incl. Swift interop) & release build
         working-directory: android
-        run: ./gradlew :app:testGithubDebugUnitTest :app:assembleGithubRelease :app:bundlePlayRelease
+        run: ./gradlew :app:testDebugUnitTest :app:assembleRelease
 
       - uses: actions/upload-artifact@v4
         with:
           name: NotchDrop-android
-          path: android/app/build/outputs/apk/github/release/*.apk
+          path: android/app/build/outputs/apk/release/*.apk

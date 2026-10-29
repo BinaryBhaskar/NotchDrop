@@ -14,7 +14,10 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.layout.Column
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
@@ -39,10 +42,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.amurot.notchdrop.BuildConfig
+import com.amurot.notchdrop.control.PhoneControlService
 import com.amurot.notchdrop.service.Node
 import com.amurot.notchdrop.service.NodeService
 import com.amurot.notchdrop.service.Updates
@@ -50,6 +56,7 @@ import kotlinx.coroutines.launch
 
 class SettingsActivity : ComponentActivity() {
     private var batteryOk by mutableStateOf(true)
+    private var controlEnabled by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,6 +83,9 @@ class SettingsActivity : ComponentActivity() {
                         NodeService.stop(this)
                     },
                     onOpenUrl = { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it))) },
+                    controlEnabled = controlEnabled,
+                    onControlSettings = { PhoneControlService.openSettings(this) },
+                    onAppInfo = { PhoneControlService.openAppInfo(this) },
                 )
             }
         }
@@ -85,6 +95,7 @@ class SettingsActivity : ComponentActivity() {
         super.onResume()
         Node.uiVisible = true
         batteryOk = getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
+        controlEnabled = PhoneControlService.isEnabled(this)
     }
 
     override fun onPause() {
@@ -102,7 +113,11 @@ private fun SettingsScreen(
     onReceiveToggle: (Boolean) -> Unit,
     onUnpair: () -> Unit,
     onOpenUrl: (String) -> Unit,
+    controlEnabled: Boolean,
+    onControlSettings: () -> Unit,
+    onAppInfo: () -> Unit,
 ) {
+    val controlOn by PhoneControlService.running.collectAsStateWithLifecycle()
     val state by Node.state.collectAsStateWithLifecycle()
     val theme by Node.themeMode.collectAsStateWithLifecycle()
     val store = Node.store
@@ -188,6 +203,45 @@ private fun SettingsScreen(
         }
 
         item {
+            NdGroup("Phone control") {
+                AnimatedContent(controlOn to controlEnabled, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "control") { (on, enabled) ->
+                    NdRow(
+                        "Control from Mac",
+                        description = when {
+                            on -> "On — your Mac can tap and type here from the mirror window, or by moving its pointer off the screen edge"
+                            enabled -> "Switched on, starting… If it stays here, turn it off and on again in Accessibility settings."
+                            else -> "Off. Turn on NotchDrop under Accessibility › Installed apps to use your Mac's mouse and keyboard here."
+                        },
+                        icon = NdIcons.Pointer,
+                        tint = if (on) Palette.ok else Palette.warn,
+                        onClick = onControlSettings,
+                    ) { NdButton(if (on) "Settings" else "Turn on", onControlSettings, style = NdButtonStyle.Tonal) }
+                }
+                AnimatedVisibility(!controlOn, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+                    Column {
+                        NdDivider()
+                        NdRow(
+                            "Greyed out or “Restricted setting”?",
+                            description = "Android blocks this for apps installed outside the Play Store. Open App info, tap ⋮ in the corner, choose “Allow restricted settings”, then turn it on again.",
+                            icon = NdIcons.Shield,
+                            tint = Palette.accent2,
+                            onClick = onAppInfo,
+                        ) { NdButton("App info", onAppInfo, style = NdButtonStyle.Text) }
+                    }
+                }
+            }
+        }
+
+        item {
+            NdGroup("Setup guide") {
+                GUIDE.forEachIndexed { i, g ->
+                    if (i > 0) NdDivider()
+                    GuideRow(g)
+                }
+            }
+        }
+
+        item {
             NdGroup("Appearance") {
                 Row(Modifier.padding(16.dp)) {
                     NdSegmented(
@@ -202,10 +256,9 @@ private fun SettingsScreen(
         item {
             NdGroup("About") {
                 NdRow("Version", icon = NdIcons.Info) { Text(BuildConfig.VERSION_NAME, color = Palette.dim, fontSize = 14.sp) }
-                if (BuildConfig.SELF_UPDATE) {
-                    NdDivider()
-                    ToggleRow("Auto-check for updates", "Once a day, asks GitHub for the latest release", NdIcons.Refresh, autoUpdate) {
-                        autoUpdate = it; store.autoUpdateCheck = it
+                NdDivider()
+                ToggleRow("Auto-check for updates", "Once a day, asks GitHub for the latest release", NdIcons.Refresh, autoUpdate) {
+                    autoUpdate = it; store.autoUpdateCheck = it
                 }
                 NdDivider()
                 NdRow(
@@ -221,7 +274,6 @@ private fun SettingsScreen(
                     tint = if (updateStatus is Updates.Status.Available) Palette.ok else Palette.accent,
                     onClick = { scope.launch { Updates.check(store, manual = true)?.let { update = it } } },
                 )
-                }
                 NdDivider()
                 NdRow("Source code", description = "github.com/BinaryBhaskar/NotchDrop", icon = NdIcons.Code, tint = Palette.accent2,
                     onClick = { onOpenUrl("https://github.com/BinaryBhaskar/NotchDrop") }) {
@@ -323,5 +375,68 @@ private fun RenameDialog(
     ) {
         NdButton("Cancel", onDismiss, style = NdButtonStyle.Text)
         NdButton("Save", save)
+    }
+}
+
+private class Guide(val title: String, val summary: String, val steps: List<String>, val icon: @Composable () -> ImageVector)
+
+private val GUIDE = listOf(
+    Guide("Pair with your Mac", "One QR scan", listOf(
+        "Install NotchDrop on the Mac (the DMG from GitHub Releases) and open it.",
+        "On the Mac, choose Pair Phone… in the menu bar.",
+        "Here, tap Scan to pair and point the camera at the QR code.",
+        "Keep both on the same Wi-Fi, or join the Mac to this phone's hotspot.",
+    )) { NdIcons.QrScan },
+    Guide("Send and receive", "Share sheet, clipboard, background receiving", listOf(
+        "To send: Share → NotchDrop from any app, or tap Clipboard on the main screen or the widget.",
+        "Add the Quick Settings tile to send the clipboard from anywhere.",
+        "Turn on Receive in the background above so the Mac can send any time, and set Battery to Unrestricted.",
+        "On the Mac, drag onto the notch, or use Share → NotchDrop.",
+    )) { NdIcons.Up },
+    Guide("Camera on the Mac", "Live camera, up to 4K", listOf(
+        "Tap Camera to Mac on the main screen, or choose Phone Camera in the Mac's menu bar.",
+        "Allow the camera the first time. A notification shows while it's live; tap Stop there to end it.",
+        "Switch lens, zoom, torch and quality from the Mac window. The shutter saves a full-size photo to the Mac.",
+        "For Zoom, FaceTime or Chrome: install OBS on the Mac, click OBS in the camera window and follow its three steps, then pick “OBS Virtual Camera” in the call.",
+    )) { NdIcons.Camera },
+    Guide("Mirror this screen", "Show and control the phone on the Mac", listOf(
+        "Tap Mirror screen, or choose Phone Screen on the Mac.",
+        "Android asks every time: pick “Entire screen” and tap Start.",
+        "To click and type in the Mac window, turn on Phone control above.",
+    )) { NdIcons.Cast },
+    Guide("Mac mouse and keyboard", "Move the pointer off the Mac's edge", listOf(
+        "Turn on Phone control above. If it's greyed out, use App info › ⋮ › Allow restricted settings first.",
+        "On the Mac: Settings › Phone › Move the pointer to the phone, then drag the phone in Arrangement to where it sits next to the screen.",
+        "Allow NotchDrop under Accessibility on the Mac when asked.",
+        "Push the pointer into the phone to use it here. Move back out, or press ⌘ Esc, to return. Right-click is Back. If Wi-Fi drops, the Mac gets its pointer back by itself.",
+        "Drag files into the phone on the Mac to send them here.",
+    )) { NdIcons.Pointer },
+    Guide("Desktop mode (DeX-style)", "A desktop-sized screen in a Mac window", listOf(
+        "Turn on Developer options (Settings › About phone › Software information › tap Build number 7 times).",
+        "In Developer options, turn on Wireless debugging.",
+        "On the Mac, install scrcpy (brew install scrcpy) and choose Phone Desktop… in the menu bar.",
+        "Tap Pair device with pairing code here, and type the IP:port and code into the Mac window.",
+        "Click Find, then Connect, then Open Desktop. Samsung phones on One UI 7 show a DeX-style taskbar there.",
+    )) { NdIcons.Laptop },
+)
+
+@Composable
+private fun GuideRow(g: Guide) {
+    var open by remember { mutableStateOf(false) }
+    val turn by androidx.compose.animation.core.animateFloatAsState(if (open) 90f else 0f, label = "chevron")
+    Column {
+        NdRow(g.title, description = g.summary, icon = g.icon(), onClick = { open = !open }) {
+            NdIcon(NdIcons.ChevronRight, Modifier.rotate(turn), size = 18.dp, tint = Palette.dim)
+        }
+        AnimatedVisibility(open, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+            Column(Modifier.padding(start = 66.dp, end = 16.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                g.steps.forEachIndexed { i, step ->
+                    Row {
+                        Text("${i + 1}", color = Palette.accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(18.dp))
+                        Text(step, color = Palette.text, fontSize = 13.sp, lineHeight = 18.sp)
+                    }
+                }
+            }
+        }
     }
 }

@@ -27,6 +27,7 @@
   - In any other app, it sends the selected text.
   - Otherwise it sends the clipboard.
 - **Settings window**, in the style of System Settings. It opens when you launch the app, or from the menu bar with ⌘,. Panes:
+  - *Setup Guide:* step-by-step setup for every feature, also under *Setup Guide…* in the menu bar.
   - *General:* launch at login, hide the menu-bar icon, Share menu setup, sounds, trackpad haptics, and update checks.
   - *Notch:* turn the notch drop zone on or off, open it on hover, turn swipe-down-to-open on or off, and set the activation-zone width (up to 560 pt) and height (up to 200 pt) with sliders. The zone only decides when the notch expands. Once it's open, it stays open while the pointer is over it, and only the drop box itself accepts the drop. A live dashed outline on screen shows the zone while you adjust it.
   - *Shortcuts:* the send hotkey and Accessibility status.
@@ -76,6 +77,7 @@
   - A System, Dark or Light theme.
   - Update checks (GitHub build only).
   - Unpair.
+- A **Setup guide** in Settings walks through pairing, sending, the camera, screen mirroring, Mac mouse and keyboard, and desktop mode.
 - Pairing is a single QR scan.
 
 **Both**
@@ -87,7 +89,12 @@
   - Nothing resumes automatically.
 - **Rename anything.** Give your Mac or phone the name the other side sees, and give the paired device a local nickname.
 - End-to-end encrypted with AES-256-GCM, using a key exchanged only through the QR code.
-- **Update prompt.** Both apps (the Android GitHub build; Play updates itself) ask once whether to check GitHub Releases automatically (off unless you agree). If you opt in, they check once a day and offer the new DMG or APK, with *Later* and *Skip This Version*. You can also check by hand from Settings, or from *Check for Updates…* in the Mac menu bar.
+- **Update prompt.** Both apps ask once whether to check GitHub Releases automatically (off unless you agree). If you opt in, they check once a day and offer the new DMG or APK, with *Later* and *Skip This Version*. You can also check by hand from Settings, or from *Check for Updates…* in the Mac menu bar.
+- **Phone camera on the Mac.** *Phone Camera* in the menu bar (or *Settings → Phone*, or the *Camera to Mac* tile on the phone) opens a live window: up to 4K/60 where the phone allows it, with lens, zoom, torch, quality, a photo shutter and recording. To use it in Zoom, FaceTime or Chrome, open it in [OBS](https://obsproject.com) and start OBS Virtual Camera; the window's OBS button shows the address.
+- **Phone screen on the Mac.** *Phone Screen* mirrors the phone into a window. With *Phone control* on, click, scroll and type in it.
+- **Phone desktop.** *Phone Desktop…* runs [scrcpy](https://github.com/Genymobile/scrcpy) over wireless debugging with `--new-display`. The phone renders a second, desktop-sized screen in a Mac window, which Samsung phones fill with a DeX-style taskbar. (Wireless DeX itself uses Miracast, which macOS can't receive.) Needs `brew install scrcpy`.
+- **Mouse and keyboard.** Turn on *Settings → Phone → Move the pointer to the phone* and drag the phone in *Arrangement* to where it sits next to your screens, like System Settings › Displays. Push the pointer into it and it appears on the phone; move back out (or press ⌘⎋) to return. Drag files into it to send them. If Wi-Fi drops, the pointer comes back to the Mac by itself.
+- **Phone control** (Android): an accessibility service that taps, swipes and types for the Mac. *Settings → Phone control* shows whether it's on and opens the system page. On Android 13+ sideloaded apps first need *App info → ⋮ → Allow restricted settings*.
 - Finds the other device automatically over Bonjour/NSD, and falls back to the last known IP addresses (for example, on a hotspot that blocks mDNS).
 
 ## Requirements
@@ -140,14 +147,9 @@ Open `android/` in Android Studio and press Run. From the command line:
 
 ```sh
 cd android
-./gradlew :app:installGithubDebug     # dev build, with a device connected over adb
-./gradlew :app:assembleGithubRelease  # app/build/outputs/apk/github/release/app-github-release.apk
-./gradlew :app:bundlePlayRelease      # app/build/outputs/bundle/playRelease/app-play-release.aab
+./gradlew :app:installDebug     # dev build, with a device connected over adb
+./gradlew :app:assembleRelease  # app/build/outputs/apk/release/app-release.apk
 ```
-
-There are two flavors:
-- `github`: the sideloaded APK on Releases, with the opt-in GitHub update check.
-- `play`: for Google Play. No self-updater, and nothing that installs packages.
 
 Debug builds install as **NotchDrop Dev** (`com.amurot.notchdrop.dev`), next to the release app, and listen on port 47822 so both can run at once. The Mac pairs with one phone at a time, so pairing the dev build replaces the release app's pairing.
 
@@ -173,7 +175,7 @@ design/     Icon renderer (swift design/make-icons.swift) and previews
 
 ```sh
 cd mac && swift build && .build/debug/NotchDrop --selftest
-cd android && ./gradlew :app:testGithubDebugUnitTest   # includes Kotlin <-> Swift interop tests
+cd android && ./gradlew :app:testDebugUnitTest   # includes Kotlin <-> Swift interop tests
 ```
 
 The Android unit tests run the protocol against the real Mac binary in both directions when `mac/.build/debug/NotchDrop` exists, and skip those cases otherwise.

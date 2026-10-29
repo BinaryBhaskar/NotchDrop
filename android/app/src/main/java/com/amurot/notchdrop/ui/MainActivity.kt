@@ -48,6 +48,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.input.ImeAction
 import com.amurot.notchdrop.BuildConfig
 import com.amurot.notchdrop.service.Places
+import com.amurot.notchdrop.stream.StreamActivity
+import com.amurot.notchdrop.stream.StreamService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.background
@@ -189,7 +191,7 @@ class MainActivity : ComponentActivity() {
         batteryOk = Node.store.batteryPromptDismissed ||
             getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
         // Ask about automatic update checks once, after pairing so it doesn't crowd the first run.
-        if (BuildConfig.SELF_UPDATE && !Node.store.updatePromptShown && Node.store.peer != null) {
+        if (!Node.store.updatePromptShown && Node.store.peer != null) {
             Node.store.updatePromptShown = true
             askUpdates = true
         }
@@ -197,7 +199,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun checkForUpdate() {
-        if (!BuildConfig.SELF_UPDATE) return
         lifecycleScope.launch { Updates.check(Node.store, manual = false)?.let { update = it } }
     }
 
@@ -360,6 +361,24 @@ private fun MainScreen(
                             pick.launch(arrayOf("*/*"))
                         }
                         ActionTile(NdIcons.Paste, "Clipboard", Palette.ok, Modifier.weight(1f).entrance(4), enabled = !state.busy, onClick = onSendClipboard)
+                    }
+                }
+                item(key = "streams") {
+                    val ctx = androidx.compose.ui.platform.LocalContext.current
+                    val live by StreamService.active.collectAsStateWithLifecycle()
+                    Row(Modifier.animateItem(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        for ((kind, icon, label) in listOf(
+                            Triple(StreamService.KIND_CAMERA, NdIcons.Camera, "Camera to Mac"),
+                            Triple(StreamService.KIND_SCREEN, NdIcons.Cast, "Mirror screen"),
+                        )) {
+                            val on = kind in live
+                            ActionTile(
+                                icon, if (on) "Live · Stop" else label, if (on) Palette.bad else Palette.accent2,
+                                Modifier.weight(1f).entrance(5), enabled = true,
+                            ) {
+                                if (on) StreamService.stop(ctx, kind) else ctx.startActivity(StreamActivity.intent(ctx, kind))
+                            }
+                        }
                     }
                 }
             }

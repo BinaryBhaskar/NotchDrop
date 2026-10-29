@@ -12,6 +12,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
@@ -77,6 +79,34 @@
             android:name=".service.NodeService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <!-- Camera and screen to the Mac. -->
+        <service
+            android:name=".stream.StreamService"
+            android:exported="false"
+            android:foregroundServiceType="camera|mediaProjection" />
+
+        <activity
+            android:name=".stream.StreamActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="false"
+            android:taskAffinity="${applicationId}.stream"
+            android:theme="@style/Theme.NotchDrop.Invisible" />
+
+        <!-- Phone control: off until you turn it on in Accessibility settings. -->
+        <service
+            android:name=".control.PhoneControlService"
+            android:exported="false"
+            android:label="@string/control_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/phone_control" />
+        </service>
 
         <service
             android:name=".service.ClipboardTile"

@@ -9,4 +9,6 @@
     <string name="shortcut_files">Send files</string>
     <string name="shortcut_folder">Received files</string>
     <string name="shortcut_scan">Scan to pair</string>
+    <string name="control_label">Phone control from Mac</string>
+    <string name="control_description">Lets your paired Mac tap, swipe and type on this phone: from the screen mirror window, or by moving the Mac\'s pointer off the edge of its screen. NotchDrop only reads the text field you\'re typing into. Works only on your own Wi-Fi with your paired Mac.</string>
 </resources>

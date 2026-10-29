@@ -101,7 +101,7 @@ struct NotchRootView: View {
                 .clipped()
         }
         .frame(width: size.width + flare * 2, height: size.height)
-        .opacity(phase == .collapsed && !ui.hasNotch ? 0 : 1)
+        .opacity(phase == .collapsed && (!ui.hasNotch || ui.hidden) ? 0 : 1)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.spring(response: 0.42, dampingFraction: 0.78), value: phase)
         .animation(.spring(response: 0.42, dampingFraction: 0.78), value: app.activity)

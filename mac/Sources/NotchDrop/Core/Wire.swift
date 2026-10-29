@@ -227,6 +227,22 @@ final class SecureChannel: @unchecked Sendable {
         try await conn.writeFrame(try tx.seal(p))
     }
 
+    private let txLock = NSLock()
+
+    /// Seals and queues a message without waiting, so callers on different threads stay in order.
+    /// For long-lived channels (streams) where several tasks send.
+    func post(json: [String: Any]) {
+        guard var p = try? JSONSerialization.data(withJSONObject: json) else { return }
+        p.insert(1, at: 0)
+        txLock.lock()
+        defer { txLock.unlock() }
+        guard let sealed = try? tx.seal(p) else { return }
+        let n = UInt32(sealed.count)
+        var d = Data([UInt8(n >> 24), UInt8((n >> 16) & 0xff), UInt8((n >> 8) & 0xff), UInt8(n & 0xff)])
+        d.append(sealed)
+        conn.conn.send(content: d, completion: .contentProcessed { _ in })
+    }
+
     func receive() async throws -> WireMessage {
         let frame = try await conn.readFrame()
         let p: Data

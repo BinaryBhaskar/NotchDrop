@@ -29,6 +29,8 @@ interface SessionDelegate {
     fun incomingStarted(control: TransferControl) {}
     /** Shown on the other device when this one cancels, e.g. "Stopped on Pixel 8." */
     val cancelNote: String get() = "Stopped on the phone."
+    /** Any other message (stream requests, input). `reply` sends on the same session. */
+    fun message(msg: JSONObject, reply: (JSONObject) -> Unit) {}
 }
 
 /** `resume` keeps an interrupted incoming batch so the sender can pick up where it stopped. */
@@ -90,6 +92,7 @@ class ProtocolServer(private val port: Int, private val delegate: SessionDelegat
                         delegate.incomingFinished(batch)
                     }
                     "ping" -> ch.sendJson(JSONObject().put("t", "pong"))
+                    else -> delegate.message(m.obj) { ch.sendJson(it) }
                 }
             }
         } catch (e: Exception) {

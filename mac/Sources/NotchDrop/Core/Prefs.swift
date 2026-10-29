@@ -75,8 +75,15 @@ final class Prefs: ObservableObject {
         static let openLinks = "openReceivedLinks"
         static let notify = "notifyReceived"
         static let shortcut = "sendShortcut"
+        static let openShortcut = "openShortcut"
+        static let hideNotch = "hideNotch"
+        static let followPointer = "notchFollowsPointer"
         static let askedAccessibility = "askedAccessibility"
         static let autoCheckUpdates = "autoCheckUpdates"
+        static let controlEnabled = "controlEnabled"
+        static let controlEdge = "controlEdge"
+        static let controlDisplay = "controlDisplay"
+        static let controlOffset = "controlOffset"
     }
 
     static let defaultZone = CGSize(width: 480, height: 160)
@@ -89,6 +96,10 @@ final class Prefs: ObservableObject {
     @Published var zoneWidth: Double { didSet { d.set(zoneWidth, forKey: Key.zoneWidth) } }
     @Published var zoneHeight: Double { didSet { d.set(zoneHeight, forKey: Key.zoneHeight) } }
     @Published var openOnHover: Bool { didSet { d.set(openOnHover, forKey: Key.openOnHover) } }
+    /// The resting notch draws nothing, and the notch never shows in screenshots or recordings.
+    @Published var hideNotch: Bool { didSet { d.set(hideNotch, forKey: Key.hideNotch) } }
+    /// Drags open the drop box on whichever display the pointer is on, not just the built-in one.
+    @Published var followPointer: Bool { didSet { d.set(followPointer, forKey: Key.followPointer) } }
     /// A two-finger swipe down on the notch opens it.
     @Published var swipeToOpen: Bool { didSet { d.set(swipeToOpen, forKey: Key.swipeToOpen) } }
     @Published var showMenuBarIcon: Bool { didSet { d.set(showMenuBarIcon, forKey: Key.showMenuBarIcon) } }
@@ -101,6 +112,14 @@ final class Prefs: ObservableObject {
     @Published var notify: Bool { didSet { d.set(notify, forKey: Key.notify) } }
     /// Opt-in daily check of GitHub Releases.
     @Published var autoCheckUpdates: Bool { didSet { d.set(autoCheckUpdates, forKey: Key.autoCheckUpdates) } }
+    /// Pushing the pointer past `controlEdge` moves the mouse and keyboard to the phone.
+    @Published var controlEnabled: Bool { didSet { d.set(controlEnabled, forKey: Key.controlEnabled) } }
+    /// UniversalControl.Edge raw value: the side of the Mac the phone sits on.
+    @Published var controlEdge: String { didSet { d.set(controlEdge, forKey: Key.controlEdge) } }
+    /// The display the phone sits next to (its UUID; empty means the main display).
+    @Published var controlDisplay: String { didSet { d.set(controlDisplay, forKey: Key.controlDisplay) } }
+    /// Where along that edge the phone's centre sits, 0…1.
+    @Published var controlOffset: Double { didSet { d.set(controlOffset, forKey: Key.controlOffset) } }
     /// nil = default per-phone folder in Downloads.
     @Published var saveFolder: URL? { didSet { d.set(saveFolder?.path, forKey: Key.saveFolder) } }
     /// Not persisted: true while the Notch settings pane is on screen, to draw the activation zone.
@@ -108,18 +127,25 @@ final class Prefs: ObservableObject {
     @Published var shortcut: Shortcut? {
         didSet { d.set(shortcut.flatMap { try? JSONEncoder().encode($0) }, forKey: Key.shortcut) }
     }
+    /// Opens (or closes) the notch on the display the pointer is on.
+    @Published var openShortcut: Shortcut? {
+        didSet { d.set(openShortcut.flatMap { try? JSONEncoder().encode($0) }, forKey: Key.openShortcut) }
+    }
 
     private init() {
         d.register(defaults: [
             Key.notchEnabled: true, Key.zoneWidth: Double(Self.defaultZone.width), Key.zoneHeight: Double(Self.defaultZone.height),
-            Key.openOnHover: false, Key.swipeToOpen: true, Key.showMenuBarIcon: true, Key.sounds: true, Key.haptics: true,
+            Key.openOnHover: false, Key.swipeToOpen: true, Key.hideNotch: false, Key.followPointer: true, Key.showMenuBarIcon: true, Key.sounds: true, Key.haptics: true,
             Key.confirmReceive: false, Key.copyText: true, Key.openLinks: false, Key.notify: false, Key.autoCheckUpdates: false,
+            Key.controlEnabled: false, Key.controlEdge: "right", Key.controlDisplay: "", Key.controlOffset: 0.5,
         ])
         notchEnabled = d.bool(forKey: Key.notchEnabled)
         zoneWidth = d.double(forKey: Key.zoneWidth).clamped(to: Self.zoneWidthRange)
         zoneHeight = d.double(forKey: Key.zoneHeight).clamped(to: Self.zoneHeightRange)
         openOnHover = d.bool(forKey: Key.openOnHover)
         swipeToOpen = d.bool(forKey: Key.swipeToOpen)
+        hideNotch = d.bool(forKey: Key.hideNotch)
+        followPointer = d.bool(forKey: Key.followPointer)
         showMenuBarIcon = d.bool(forKey: Key.showMenuBarIcon)
         sounds = d.bool(forKey: Key.sounds)
         haptics = d.bool(forKey: Key.haptics)
@@ -128,8 +154,13 @@ final class Prefs: ObservableObject {
         openLinks = d.bool(forKey: Key.openLinks)
         notify = d.bool(forKey: Key.notify)
         autoCheckUpdates = d.bool(forKey: Key.autoCheckUpdates)
+        controlEnabled = d.bool(forKey: Key.controlEnabled)
+        controlEdge = d.string(forKey: Key.controlEdge) ?? "right"
+        controlDisplay = d.string(forKey: Key.controlDisplay) ?? ""
+        controlOffset = d.double(forKey: Key.controlOffset)
         saveFolder = d.string(forKey: Key.saveFolder).map { URL(fileURLWithPath: $0, isDirectory: true) }
         shortcut = d.data(forKey: Key.shortcut).flatMap { try? JSONDecoder().decode(Shortcut.self, from: $0) }
+        openShortcut = d.data(forKey: Key.openShortcut).flatMap { try? JSONDecoder().decode(Shortcut.self, from: $0) }
     }
 
     func resetZone() {

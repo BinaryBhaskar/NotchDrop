@@ -4,15 +4,17 @@ import ServiceManagement
 import SwiftUI
 
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, notch, shortcuts, receiving, devices, about
+    case guide, general, notch, shortcuts, receiving, phone, devices, about
     var id: String { rawValue }
 
     var title: String {
         switch self {
+        case .guide: return "Setup Guide"
         case .general: return "General"
         case .notch: return "Notch"
         case .shortcuts: return "Shortcuts"
         case .receiving: return "Receiving"
+        case .phone: return "Phone"
         case .devices: return "Devices"
         case .about: return "About"
         }
@@ -20,10 +22,12 @@ enum SettingsPane: String, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
+        case .guide: return "book.fill"
         case .general: return "gearshape.fill"
         case .notch: return "macbook"
         case .shortcuts: return "command"
         case .receiving: return "tray.and.arrow.down.fill"
+        case .phone: return "cursorarrow.motionlines"
         case .devices: return "iphone.gen3"
         case .about: return "info.circle.fill"
         }
@@ -31,10 +35,12 @@ enum SettingsPane: String, CaseIterable, Identifiable {
 
     var tint: Color {
         switch self {
+        case .guide: return .pink
         case .general: return .gray
         case .notch: return .black
         case .shortcuts: return .indigo
         case .receiving: return .green
+        case .phone: return .orange
         case .devices: return .blue
         case .about: return .teal
         }
@@ -113,10 +119,12 @@ struct SettingsView: View {
 
     @ViewBuilder private var detail: some View {
         switch nav.pane ?? .general {
+        case .guide: GuidePane(nav: nav)
         case .general: GeneralPane(prefs: prefs)
         case .notch: NotchPane(prefs: prefs)
         case .shortcuts: ShortcutsPane(prefs: prefs)
         case .receiving: ReceivingPane(app: app, prefs: prefs)
+        case .phone: PhonePane(app: app, prefs: prefs)
         case .devices: DevicesPane(app: app, pair: pair)
         case .about: AboutPane()
         }
@@ -224,6 +232,13 @@ struct NotchPane: View {
                      : "The notch stays untouched. Send from the menu bar or with your shortcut.")
             }
             Section {
+                Toggle("Hide the notch", isOn: $prefs.hideNotch)
+                Toggle("Open on the display with the pointer", isOn: $prefs.followPointer)
+            } footer: {
+                Text("Hidden, nothing is drawn until you drag something to the top of the screen or open it, and it never shows in screenshots, recordings or screen sharing. Drops work the same.")
+            }
+            .disabled(!prefs.notchEnabled)
+            Section {
                 Toggle("Open when the pointer rests on the notch", isOn: $prefs.openOnHover)
             } footer: {
                 Text("Off: the notch only opens while you're dragging something. On: hovering opens it too, and clicking the box lets you pick files.")
@@ -315,6 +330,13 @@ struct ShortcutsPane: View {
                 • Otherwise, whatever is on the clipboard.
                 """)
             }
+            Section {
+                LabeledContent("Open notch") {
+                    ShortcutRecorder(shortcut: $prefs.openShortcut)
+                }
+            } footer: {
+                Text("Opens the notch on the display the pointer is on; press again or click elsewhere to close it. In the Shortcuts app, use “Open URL” with notchdrop://open to do the same.")
+            }
             Section("Permissions") {
                 LabeledContent {
                     if trusted.value {
@@ -335,6 +357,255 @@ struct ShortcutsPane: View {
             }
         }
         .onReceive(poll) { _ in trusted.value = SelectionGrabber.accessibilityTrusted }
+    }
+}
+
+/// Step-by-step setup for every feature, each with a link to the pane that has its settings.
+struct GuidePane: View {
+    @ObservedObject var nav: SettingsNavigation
+    @StateObject private var open = Box(Set<String>())
+
+    private struct Topic {
+        let title: String, symbol: String, pane: SettingsPane?, steps: [String]
+    }
+
+    private let topics: [Topic] = [
+        Topic(title: "Pair your phone", symbol: "qrcode", pane: .devices, steps: [
+            "Install NotchDrop on the Android phone (the APK from GitHub Releases).",
+            "On the Mac, choose **Pair Phone…** in the menu bar. A QR code appears.",
+            "On the phone, tap **Scan to pair** and scan it.",
+            "Keep both on the same Wi-Fi, or join the Mac to the phone's hotspot.",
+        ]),
+        Topic(title: "Send to the phone", symbol: "arrow.up.circle", pane: .shortcuts, steps: [
+            "Drag files, folders, links or text up to the notch and drop them on the box that opens.",
+            "Or use **Share › NotchDrop** in Finder, Photos and Safari, or **Services › Send to Phone with NotchDrop**.",
+            "Record a **Send selection** shortcut in Shortcuts to send whatever is selected, from anywhere.",
+            "If the Share item is missing: System Settings › General › Login Items & Extensions › Sharing.",
+        ]),
+        Topic(title: "Receive from the phone", symbol: "arrow.down.circle", pane: .receiving, steps: [
+            "On the phone, use **Share › NotchDrop**, or the **Clipboard** tile.",
+            "Files land in ~/Downloads/From <phone>, or the folder set in **Receiving**.",
+            "Swipe down on the notch with two fingers (or hover, if turned on) to see recent items; ⌘Y opens History.",
+            "Turn on **Receive in the background** on the phone so the Mac can send to it anytime.",
+        ]),
+        Topic(title: "Notch", symbol: "macbook", pane: .notch, steps: [
+            "Record an **Open notch** shortcut in Shortcuts to open it on the screen with the pointer.",
+            "**Hide the notch** keeps it out of sight and out of screenshots; drops still work.",
+            "Adjust the activation zone with the sliders in **Notch**.",
+        ]),
+        Topic(title: "Phone camera as a webcam", symbol: "camera", pane: .phone, steps: [
+            "Choose **Phone Camera** in the menu bar, or tap **Camera to Mac** on the phone. The phone may ask you to tap a notification first.",
+            "Pick lens, zoom, torch and quality (up to 4K) in the window; the shutter saves a full photo here.",
+            "For Zoom, FaceTime or Chrome: install OBS (obsproject.com), click **OBS** in the camera window and follow its three steps.",
+            "In the call app, choose **OBS Virtual Camera**.",
+        ]),
+        Topic(title: "Phone screen", symbol: "rectangle.on.rectangle", pane: .phone, steps: [
+            "Choose **Phone Screen** in the menu bar, or tap **Mirror screen** on the phone.",
+            "On the phone, choose **Entire screen** and tap **Start** (Android asks every time).",
+            "To click, scroll and type in the window, turn on **Phone control** in the phone app's settings.",
+        ]),
+        Topic(title: "Mouse and keyboard on the phone", symbol: "cursorarrow.motionlines", pane: .phone, steps: [
+            "On the phone: Settings › **Phone control** › **Turn on**. If it's greyed out, tap **App info**, then ⋮ › **Allow restricted settings**, and try again.",
+            "Here, in **Phone**, turn on **Move the pointer to the phone**, then drag the phone in **Arrangement** next to the screen and spot where it sits.",
+            "Allow NotchDrop under **Accessibility** when asked. After each update, switch it off and on again there.",
+            "Push the pointer into the phone. Come back out the same side, or press ⌘⎋. Right-click is Back.",
+            "Drag files into the phone to send them.",
+            "If Wi-Fi drops, the pointer and keyboard come back to the Mac on their own within a few seconds.",
+        ]),
+        Topic(title: "Phone desktop (DeX-style)", symbol: "display", pane: nil, steps: [
+            "In Terminal: **brew install scrcpy**.",
+            "On the phone, turn on Developer options (About phone › Software information › tap Build number 7 times), then **Wireless debugging**.",
+            "Choose **Phone Desktop…** in the menu bar.",
+            "On the phone, tap **Pair device with pairing code** and type its IP:port and code into **Pair**.",
+            "Click **Find**, then **Connect**, then **Open Desktop**.",
+        ]),
+    ]
+
+    var body: some View {
+        Form {
+            Section {
+                Text("Set up each feature in a few steps. Click a topic to expand it.")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(topics, id: \.title) { t in
+                Section {
+                    DisclosureGroup(isExpanded: Binding(
+                        get: { open.value.contains(t.title) },
+                        set: { on in if on { open.value.insert(t.title) } else { open.value.remove(t.title) } }
+                    )) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(Array(t.steps.enumerated()), id: \.offset) { i, step in
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Text("\(i + 1)").font(.callout.monospacedDigit().weight(.semibold)).foregroundStyle(.tint)
+                                        .frame(width: 14, alignment: .trailing)
+                                    Text(.init(step)).font(.callout).fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                            HStack {
+                                Spacer()
+                                if let pane = t.pane {
+                                    Button("Open \(pane.title) Settings") { nav.pane = pane }
+                                } else {
+                                    Button("Open Phone Desktop…") { DesktopWindow.shared.show() }
+                                }
+                            }
+                        }
+                        .padding(.top, 6)
+                    } label: {
+                        // The whole row toggles, not just the chevron.
+                        Label(t.title, systemImage: t.symbol)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    if open.value.contains(t.title) { open.value.remove(t.title) } else { open.value.insert(t.title) }
+                                }
+                            }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct PhonePane: View {
+    @ObservedObject var app: AppModel
+    @ObservedObject var prefs: Prefs
+    @StateObject private var trusted = Box(SelectionGrabber.accessibilityTrusted)
+    private let poll = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        Form {
+            Section {
+                LabeledContent {
+                    Button(app.liveStreams.contains(.camera) ? "Stop" : "Start") {
+                        app.liveStreams.contains(.camera) ? app.stopStream(.camera) : app.requestStream(.camera)
+                    }
+                } label: {
+                    Text("Camera")
+                    Text("Up to 4K at 60 fps where the phone supports it. Switch lenses, zoom, torch and take photos from the window.")
+                }
+                LabeledContent {
+                    Button(app.liveStreams.contains(.screen) ? "Stop" : "Start") {
+                        app.liveStreams.contains(.screen) ? app.stopStream(.screen) : app.requestStream(.screen)
+                    }
+                } label: {
+                    Text("Screen")
+                    Text("Mirrors the phone. Click and type in the window when Phone control is on in the phone app.")
+                }
+                LabeledContent {
+                    Button("Open…") { DesktopWindow.shared.show() }
+                } label: {
+                    Text("Desktop")
+                    Text("A separate desktop-sized screen from the phone, through scrcpy and wireless debugging.")
+                }
+            } header: {
+                Text("Camera and screen")
+            } footer: {
+                Text("To use the camera in Zoom, FaceTime or Chrome: in OBS, add the stream window (or the Media Source the camera window shows) and click Start Virtual Camera, then pick “OBS Virtual Camera”.")
+            }
+            Section {
+                Toggle("Move the pointer to the phone", isOn: $prefs.controlEnabled)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Arrangement")
+                    Text("Drag the phone to the edge of the screen it sits next to. The pointer crosses over only along the phone.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    ArrangementView(prefs: prefs)
+                }
+                .disabled(!prefs.controlEnabled)
+                .opacity(prefs.controlEnabled ? 1 : 0.5)
+                LabeledContent {
+                    if trusted.value {
+                        Label("Allowed", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                    } else {
+                        Button("Open Settings…") { SelectionGrabber.openAccessibilitySettings() }
+                    }
+                } label: {
+                    Text("Accessibility")
+                    Text("Needed to take over the mouse and keyboard. After installing an update, turn NotchDrop off and on again in the list.")
+                }
+            } header: {
+                Text("Mouse and keyboard")
+            } footer: {
+                Text("""
+                Push the pointer into the phone: the mouse and keyboard work the phone until you move back out the same side, or press ⌘⎋. If the connection drops, the pointer comes back on its own within a few seconds. Right-click goes Back, ⌘H goes Home, ⌘V pastes the Mac clipboard.
+                Drag files past the edge to send them to the phone.
+                The phone needs Phone control turned on in NotchDrop's settings there.
+                """)
+            }
+        }
+        .onReceive(poll) { _ in trusted.value = SelectionGrabber.accessibilityTrusted }
+    }
+}
+
+/// The Mac's displays and the phone, like System Settings › Displays. Drag the phone; it snaps to the nearest free edge.
+struct ArrangementView: View {
+    @ObservedObject var prefs: Prefs
+    @StateObject private var screens = Box(PhonePlacement.screens())
+    @StateObject private var drag = Box(CGSize.zero)
+    private let changed = NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+
+    var body: some View {
+        GeometryReader { geo in
+            let all = screens.value
+            let phone = PhonePlacement.phoneSize(all)
+            let bounds = all.reduce(CGRect.null) { $0.union($1.frame) }
+                .insetBy(dx: -phone.height - 40, dy: -phone.height - 40)
+            let scale = min(geo.size.width / max(bounds.width, 1), geo.size.height / max(bounds.height, 1))
+            let ox = (geo.size.width - bounds.width * scale) / 2, oy = (geo.size.height - bounds.height * scale) / 2
+            let map = { (r: CGRect) in
+                CGRect(x: ox + (r.minX - bounds.minX) * scale, y: oy + (r.minY - bounds.minY) * scale,
+                       width: r.width * scale, height: r.height * scale)
+            }
+            let placed = placement(all, phone)
+            let p = map(placed.rect)
+
+            ZStack(alignment: .topLeading) {
+                ForEach(all, id: \.uuid) { s in
+                    let r = map(s.frame)
+                    let selected = s.uuid == placed.uuid
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(LinearGradient(colors: [Color.blue.opacity(0.55), Color.indigo.opacity(0.55)], startPoint: .top, endPoint: .bottom))
+                        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(selected ? Color.accentColor : .white.opacity(0.25), lineWidth: selected ? 2 : 1))
+                        .overlay(Text(s.name).font(.caption2.weight(.medium)).foregroundStyle(.white).lineLimit(1).padding(4))
+                        .frame(width: r.width, height: r.height)
+                        .offset(x: r.minX, y: r.minY)
+                }
+                RoundedRectangle(cornerRadius: max(4, p.width * 0.16))
+                    .fill(Color.orange.gradient)
+                    .overlay(Image(systemName: "iphone").font(.system(size: min(p.width, p.height) * 0.45)).foregroundStyle(.white))
+                    .overlay(RoundedRectangle(cornerRadius: max(4, p.width * 0.16)).strokeBorder(.white.opacity(0.6), lineWidth: 1))
+                    .shadow(color: .black.opacity(drag.value == .zero ? 0.15 : 0.35), radius: drag.value == .zero ? 2 : 6)
+                    .frame(width: p.width, height: p.height)
+                    .offset(x: p.minX + drag.value.width, y: p.minY + drag.value.height)
+                    .gesture(
+                        DragGesture(minimumDistance: 1)
+                            .onChanged { drag.value = $0.translation }
+                            .onEnded { v in
+                                let moved = placed.rect.offsetBy(dx: v.translation.width / scale, dy: v.translation.height / scale)
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                    if let snap = PhonePlacement.snap(moved, screens: all, phone: phone) {
+                                        prefs.controlDisplay = snap.uuid
+                                        prefs.controlEdge = snap.edge.rawValue
+                                        prefs.controlOffset = snap.offset
+                                    }
+                                    drag.value = .zero
+                                }
+                            }
+                    )
+                    .help("Drag to where the phone sits")
+            }
+        }
+        .frame(height: 200)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+        .onReceive(changed) { _ in screens.value = PhonePlacement.screens() }
+    }
+
+    private func placement(_ all: [PhonePlacement.Screen], _ phone: CGSize) -> (uuid: String, rect: CGRect) {
+        let edge = UniversalControl.Edge(rawValue: prefs.controlEdge) ?? .right
+        guard let s = all.first(where: { $0.uuid == prefs.controlDisplay }) ?? all.first(where: { CGDisplayIsMain($0.id) != 0 }) ?? all.first
+        else { return ("", .zero) }
+        return (s.uuid, PhonePlacement.phoneRect(s, edge, offset: prefs.controlOffset, phone: phone))
     }
 }
 
@@ -372,7 +643,7 @@ final class RecorderState: ObservableObject {
 
     func start(done: @escaping (Shortcut?) -> Void, clear: @escaping () -> Void) {
         recording = true
-        Hotkey.shared.register(nil) // so pressing the current combo records it instead of firing
+        Hotkey.shared.suspend()
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             let key = Int(e.keyCode), shortcut = Shortcut(event: e)
             MainActor.assumeIsolated {
@@ -396,7 +667,7 @@ final class RecorderState: ObservableObject {
         monitor = nil
         if recording {
             recording = false
-            Hotkey.shared.register(Prefs.shared.shortcut)
+            Hotkey.shared.registerAll()
         }
     }
 }

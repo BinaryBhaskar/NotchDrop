@@ -2,31 +2,49 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 
-/// Registers one system-wide hotkey through Carbon (works without Accessibility permission).
+/// Registers system-wide hotkeys through Carbon (works without Accessibility permission).
 @MainActor
 final class Hotkey {
-    static let shared = Hotkey()
-    var onPress: (() -> Void)?
+    enum Action: UInt32 { case sendSelection = 1, openNotch = 2 }
 
-    private var ref: EventHotKeyRef?
+    static let shared = Hotkey()
+    var onPress: ((Action) -> Void)?
+
+    private var refs: [Action: EventHotKeyRef] = [:]
     private var handler: EventHandlerRef?
 
-    func register(_ s: Shortcut?) {
-        if let ref { UnregisterEventHotKey(ref) }
-        ref = nil
+    func register(_ s: Shortcut?, for action: Action) {
+        if let ref = refs.removeValue(forKey: action) { UnregisterEventHotKey(ref) }
         guard let s else { return }
         installHandler()
-        let id = EventHotKeyID(signature: OSType(0x4E_44_52_50), id: 1) // "NDRP"
+        var ref: EventHotKeyRef?
+        let id = EventHotKeyID(signature: OSType(0x4E_44_52_50), id: action.rawValue) // "NDRP"
         let status = RegisterEventHotKey(s.keyCode, s.carbonModifiers, id, GetApplicationEventTarget(), 0, &ref)
         if status != noErr { NSLog("NotchDrop: hotkey \(s.display) unavailable (\(status))") }
+        if let ref { refs[action] = ref }
+    }
+
+    /// While a shortcut is being recorded, none fire, so pressing a current combo records it.
+    func suspend() {
+        for ref in refs.values { UnregisterEventHotKey(ref) }
+        refs = [:]
+    }
+
+    func registerAll() {
+        register(Prefs.shared.shortcut, for: .sendSelection)
+        register(Prefs.shared.openShortcut, for: .openNotch)
     }
 
     private func installHandler() {
         guard handler == nil else { return }
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, _, ctx in
+        InstallEventHandler(GetApplicationEventTarget(), { _, event, ctx in
+            var id = EventHotKeyID()
+            GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+                              nil, MemoryLayout<EventHotKeyID>.size, nil, &id)
             let me = Unmanaged<Hotkey>.fromOpaque(ctx!).takeUnretainedValue()
-            DispatchQueue.main.async { MainActor.assumeIsolated { me.onPress?() } }
+            guard let action = Action(rawValue: id.id) else { return noErr }
+            DispatchQueue.main.async { MainActor.assumeIsolated { me.onPress?(action) } }
             return noErr
         }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), &handler)
     }

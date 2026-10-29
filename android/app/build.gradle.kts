@@ -19,10 +19,10 @@ android {
     defaultConfig {
         applicationId = "com.amurot.notchdrop"
         minSdk = 29
-        // Play requires 36 for new apps and updates. Stay below 37, where Android 17's local-network permission applies.
+        // Stay below 37, where Android 17's local-network permission applies.
         targetSdk = 36
-        versionCode = 6
-        versionName = "1.3.0"
+        versionCode = 7
+        versionName = "1.4.0"
         // 64-bit ARM covers modern phones and Apple-silicon emulators; keeps ML Kit's native libs small.
         ndk { abiFilters += "arm64-v8a" }
     }
@@ -33,20 +33,6 @@ android {
             storePassword = releaseKeys.getProperty("storePassword")
             keyAlias = releaseKeys.getProperty("keyAlias")
             keyPassword = releaseKeys.getProperty("keyPassword")
-        }
-    }
-
-    // github: the APK on GitHub Releases, which checks there for updates. play: Google Play, which updates it itself
-    // (Play policy forbids any other update path).
-    flavorDimensions += "store"
-    productFlavors {
-        create("github") {
-            dimension = "store"
-            buildConfigField("boolean", "SELF_UPDATE", "true")
-        }
-        create("play") {
-            dimension = "store"
-            buildConfigField("boolean", "SELF_UPDATE", "false")
         }
     }
 

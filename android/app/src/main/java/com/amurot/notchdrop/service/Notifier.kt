@@ -68,6 +68,26 @@ object Notifier {
             .build()
     }
 
+    /** The Mac asked for the camera or screen while NotchDrop couldn't open on its own. */
+    fun streamRequest(ctx: Context, kind: String, mac: String) {
+        val nm = ctx.getSystemService(NotificationManager::class.java)
+        val pi = PendingIntent.getActivity(
+            ctx, 2, com.amurot.notchdrop.stream.StreamActivity.intent(ctx, kind),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val n = Notification.Builder(ctx, CH_RECEIVED)
+            .setSmallIcon(R.drawable.ic_notify)
+            .setContentTitle(if (kind == "camera") "Use camera on $mac?" else "Show this screen on $mac?")
+            .setContentText("Tap to start")
+            .setContentIntent(pi)
+            .setAutoCancel(true)
+            .setTimeoutAfter(60_000)
+            .build()
+        nm.notify(STREAM_REQUEST_ID, n)
+    }
+
+    private const val STREAM_REQUEST_ID = 4
+
     private fun cancelAction(ctx: Context) = Notification.Action.Builder(
         null, "Cancel",
         PendingIntent.getBroadcast(ctx, 1, Intent(ctx, CancelReceiver::class.java), PendingIntent.FLAG_IMMUTABLE),

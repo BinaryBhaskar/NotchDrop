@@ -71,6 +71,9 @@ final class AppModel: ObservableObject {
     private var transfer: TransferControl?
     private var queue: [(urls: [URL], texts: [String])] = [] { didSet { queuedCount = queue.count } }
     private var meter = RateMeter()
+    /// Open camera and screen windows, one of each at most.
+    private var streamWindows: [StreamSession.Kind: StreamWindowController] = [:]
+    @Published private(set) var liveStreams: Set<StreamSession.Kind> = []
 
     var peerName: String { peer?.displayName ?? "Phone" }
     var isBusy: Bool {
@@ -231,6 +234,61 @@ final class AppModel: ObservableObject {
             }
             pinging = false
         }
+    }
+
+    // MARK: Streams
+
+    /// Asks the phone to start its camera or screen; the phone calls back with the stream.
+    func requestStream(_ kind: StreamSession.Kind) {
+        if let w = streamWindows[kind] { w.show(); return }
+        guard store.peer != nil else { return }
+        Task {
+            guard let c = await connect() else {
+                setActivity(.failed("\(peerName) isn't reachable"), resetAfter: 5)
+                return
+            }
+            defer { c.channel.close() }
+            do {
+                try await c.channel.send(json: ["t": "stream_request", "kind": kind.rawValue])
+                let reply = try await withTimeout(8) { try await c.channel.expect("stream_ack") }
+                try? await c.channel.send(json: ["t": "bye"])
+                if reply["ok"] as? Bool != true {
+                    setActivity(.failed(reply["message"] as? String ?? "\(peerName) couldn't start"), resetAfter: 6)
+                } else if let note = reply["message"] as? String {
+                    // The phone needs a tap first (Android's screen-capture prompt, or it couldn't open by itself).
+                    setActivity(.incoming(summary: note), resetAfter: 8)
+                    Notifier.shared.note(title: kind == .camera ? "Phone camera" : "Phone screen", body: note)
+                }
+            } catch {
+                setActivity(.failed("Update NotchDrop on \(peerName) to use this"), resetAfter: 6)
+            }
+        }
+    }
+
+    func stopStream(_ kind: StreamSession.Kind) { streamWindows[kind]?.close() }
+
+    // MARK: Phone control
+
+    /// A session for UniversalControl to send input on; the caller closes it.
+    func openSession() async -> PeerLink.Connected? { await connect() }
+
+    func controlNote(_ text: String) { setActivity(.incoming(summary: text), resetAfter: 6) }
+
+    fileprivate func openStream(_ info: [String: Any], channel: SecureChannel) -> StreamSession? {
+        guard let kind = StreamSession.Kind(rawValue: info["kind"] as? String ?? "") else { return nil }
+        streamWindows[kind]?.close()
+        let s = StreamSession(kind: kind, info: info, channel: channel, peerName: peerName)
+        let w = StreamWindowController(session: s)
+        streamWindows[kind] = w
+        liveStreams.insert(kind)
+        s.onEnd = { [weak self, weak w] in
+            guard let self, let w, self.streamWindows[kind] === w else { return }
+            self.streamWindows[kind] = nil
+            self.liveStreams.remove(kind)
+            w.close()
+        }
+        w.show()
+        return s
     }
 
     // MARK: Sending
@@ -561,6 +619,15 @@ private final class Bridge: SessionDelegate, @unchecked Sendable {
 
     func incomingStarted(_ control: TransferControl) {
         Task { @MainActor in self.model?.incomingStarted(control) }
+    }
+
+    func streamOpened(_ info: [String: Any], channel: SecureChannel) async {
+        let session = await MainActor.run { model?.openStream(info, channel: channel) }
+        guard let session else {
+            channel.post(json: ["t": "bye"])
+            return
+        }
+        await session.run()
     }
 
     func shouldAccept(offer: [String: Any]) async -> Bool {

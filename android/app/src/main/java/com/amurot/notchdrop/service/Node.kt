@@ -30,6 +30,9 @@ import com.amurot.notchdrop.core.SessionDelegate
 import com.amurot.notchdrop.core.Transfer
 import com.amurot.notchdrop.core.TransferControl
 import com.amurot.notchdrop.core.Wire
+import com.amurot.notchdrop.control.PhoneControlService
+import com.amurot.notchdrop.stream.StreamActivity
+import com.amurot.notchdrop.stream.StreamService
 import com.amurot.notchdrop.ui.ThemeMode
 import java.io.File
 import java.net.InetAddress
@@ -220,6 +223,41 @@ object Node : SessionDelegate {
     }
 
     override val cancelNote: String get() = "Stopped on ${store.deviceName}."
+
+    /** Stream requests and Phone control input from the Mac. */
+    override fun message(msg: JSONObject, reply: (JSONObject) -> Unit) {
+        when (msg.optString("t")) {
+            "stream_request" -> {
+                val kind = msg.optString("kind")
+                if (kind != StreamService.KIND_CAMERA && kind != StreamService.KIND_SCREEN) {
+                    reply(JSONObject().put("t", "stream_ack").put("ok", false).put("message", "Unknown stream"))
+                    return
+                }
+                reply(JSONObject().put("t", "stream_ack").put("ok", true).apply {
+                    if (kind in StreamService.active.value) return@apply
+                    // Android lets us open a screen from the background only in these cases; otherwise a tap is needed.
+                    val canOpen = uiVisible || PhoneControlService.running.value
+                    val started = canOpen && runCatching { ctx.startActivity(StreamActivity.intent(ctx, kind)) }.isSuccess
+                    if (!started) {
+                        Notifier.streamRequest(ctx, kind, store.peer?.displayName ?: "Mac")
+                        put("message", "Tap the notification on ${store.deviceName} to start")
+                    } else if (kind == StreamService.KIND_SCREEN) {
+                        put("message", "Tap Start now on ${store.deviceName}")
+                    }
+                })
+            }
+            "stream_stop" -> StreamService.stop(ctx, msg.optString("kind"))
+            "input" -> {
+                val svc = PhoneControlService.instance
+                if (svc == null) {
+                    reply(JSONObject().put("t", "input_exit").put("pos", 0.5).put("message", "Turn on Phone control in NotchDrop's settings on ${store.deviceName}"))
+                } else {
+                    // The service replies from the main thread; the socket write can't happen there.
+                    svc.universal(msg) { j -> scope.launch(Dispatchers.IO) { runCatching { reply(j) } } }
+                }
+            }
+        }
+    }
 
     override fun incomingStarted(control: TransferControl) {
         transfer = control
@@ -413,6 +451,9 @@ object Node : SessionDelegate {
             if (transfer === control) transfer = null
         }
     }
+
+    /** A fresh session to the Mac, for a stream. */
+    suspend fun dial(): PeerLink.Connected = connect(store.peer ?: throw NDException("Not paired with a Mac"))
 
     private suspend fun connect(peer: PairedMac, timeoutMs: Int = 4000): PeerLink.Connected {
         val hosts = (nsdAddrs[peer.id].orEmpty() + peer.addrs).distinct()
